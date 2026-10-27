@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cité 3D – ruelles, jardins, immeubles</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#cfd8dc;font-family:system-ui,sans-serif}
+  #info{position:fixed;left:12px;top:12px;padding:8px 12px;background:rgba(255,255,255,.88);border-radius:8px;font-size:13px;line-height:1.5}
+  #info button{margin:6px 4px 0 0;padding:4px 8px;cursor:pointer}
+</style>
+</head>
+<body>
+<div id="info">Cité – vue 3D<br>Clic gauche : tourner · Molette : zoom · Clic droit : déplacer<br>
+<button id="tHeights">Hauteurs variées</button><button id="tTrees">Arbres</button><button id="tLabels">Étiquettes</button></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(function () {
+  const S = 0.1, CX = 365, CY = 350, FLOOR = 0.34, CURB = 0.1;
+  const X = px => (px - CX) * S, Z = py => (py - CY) * S;
+  const rad = d => d * Math.PI / 180;
+  let seed = 7;
+  const rnd = () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+
+  // ---------- Scène ----------
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xcfd8dc);
+  scene.fog = new THREE.Fog(0xcfd8dc, 90, 210);
+  const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 500);
+  camera.position.set(0, 50, 58);
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  document.body.appendChild(renderer.domElement);
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.maxPolarAngle = Math.PI / 2.05;
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x8d9a7a, 0.8));
+  const sun = new THREE.DirectionalLight(0xfff2d6, 0.9);
+  sun.position.set(-40, 70, 30);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  Object.assign(sun.shadow.camera, { left: -50, right: 50, top: 50, bottom: -50, near: 1, far: 200 });
+  scene.add(sun);
+
+  // ---------- Routes (asphalte) ----------
+  const road = new THREE.Mesh(new THREE.PlaneGeometry(95, 95), new THREE.MeshLambertMaterial({ color: 0xa9a9a9 }));
+  road.rotation.x = -Math.PI / 2; road.position.y = -0.02; road.receiveShadow = true;
+  scene.add(road);
+
+  // ---------- Îlots : pelouse avec bordure surélevée ----------
+  const islands = [
+    [[120,75],[330,135],[335,215],[250,225],[105,195]],
+    [[350,150],[520,185],[560,260],[500,280],[345,215]],
+    [[100,215],[320,230],[325,420],[270,500],[95,490]],
+    [[330,260],[515,310],[520,540],[420,545],[335,430]],
+    [[580,230],[705,250],[705,330],[585,335]],
+    [[585,385],[705,385],[710,600],[585,610]],
+    [[40,520],[500,590],[500,690],[45,690]]
+  ];
+  const inPoly = (p, x, y) => { let c = false; for (let i = 0, j = p.length - 1; i < p.length; j = i++) { const [xi, yi] = p[i], [xj, yj] = p[j]; if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c; } return c; };
+  islands.forEach(poly => {
+    const sh = new THREE.Shape();
+    poly.forEach(([x, y], i) => i ? sh.lineTo(X(x), -Z(y)) : sh.moveTo(X(x), -Z(y)));
+    const m = new THREE.Mesh(new THREE.ExtrudeGeometry(sh, { depth: CURB, bevelEnabled: false }),
+      [new THREE.MeshLambertMaterial({ color: 0x9fc27c }), new THREE.MeshLambertMaterial({ color: 0xd8d4c4 })]);
+    m.rotation.x = -Math.PI / 2; m.receiveShadow = true;
+    scene.add(m);
+  });
+
+  // ---------- Ruelles : [points…], largeur en px ----------
+  const lanes = [
+    [[[262,262],[262,418]], 12],
+    [[[100,303],[255,303]], 8],
+    [[[150,215],[320,235]], 8],
+    [[[340,428],[515,428]], 10],
+    [[[452,315],[452,428]], 8],
+    [[[498,400],[498,545]], 10],
+    [[[595,328],[700,328]], 8]
+  ];
+  const laneMat = new THREE.MeshLambertMaterial({ color: 0xcfc6ab });
+  lanes.forEach(([pts, w]) => {
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [x1, y1] = pts[i], [x2, y2] = pts[i + 1];
+      const len = Math.hypot(x2 - x1, y2 - y1) * S;
+      const m = new THREE.Mesh(new THREE.BoxGeometry(len, 0.02, w * S), laneMat);
+      m.position.set(X((x1 + x2) / 2), CURB + 0.01, Z((y1 + y2) / 2));
+      m.rotation.y = -Math.atan2(y2 - y1, x2 - x1);
+      m.receiveShadow = true; scene.add(m);
+    }
+  });
+  const distSeg = (px, py, [x1, y1], [x2, y2]) => {
+    const dx = x2 - x1, dy = y2 - y1, t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)));
+    return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+  };
+
+  // ---------- Immeubles : [cx, cy, largeur, profondeur, angle°, étages, couleur?] ----------
+  const BRICK = 0xd2b48c, WHITE = 0xf5f5f5, GREY = 0x9a9a9a;
+  const B = [
+    [165,95,60,24,25,5],[220,115,55,24,25,6],[272,128,55,24,25,5],[305,140,35,22,25,4],
+    [395,182,110,30,28,8],[480,215,60,28,35,8],[525,245,26,50,80,7],
+    [150,180,45,20,0,3],[205,195,40,22,0,4],[290,205,45,22,10,3],
+    [145,265,70,55,0,3,WHITE],[210,262,45,60,0,3,WHITE],
+    [70,250,22,45,0,5],[65,360,22,70,0,5],[130,350,18,70,0,4],
+    [185,345,80,14,0,3],[190,390,60,14,0,3],
+    [300,350,18,80,0,6],[300,285,40,18,0,4],
+    [160,420,100,18,25,4],[245,462,90,18,25,4],[145,490,90,20,25,5],[215,505,60,18,25,4],
+    [300,545,150,20,25,5],[390,570,120,20,25,6],[285,600,170,22,25,5],[170,635,110,22,25,4],[330,640,110,22,25,5],
+    [375,300,18,70,0,6],[355,395,20,60,0,5],[395,360,40,18,0,4],[420,300,50,18,0,4],
+    [490,290,40,16,0,3],[480,385,18,60,0,5],[395,465,50,40,0,5],[460,515,20,80,0,5],
+    [525,420,36,190,0,11],[515,340,36,60,0,9],
+    [595,520,30,120,0,6],[640,610,60,22,15,5],[600,640,35,55,0,4],[455,610,70,20,25,4],[500,640,25,50,0,6],
+    [630,262,70,22,35,4],[675,365,85,20,25,4],[620,285,22,40,0,4],
+    [690,448,75,110,0,2,GREY]
+  ];
+  const buildings = B.map((b, i) => {
+    const [cx, cy, w, d, a, fl, col] = b;
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w * S, 1, d * S), new THREE.MeshLambertMaterial({ color: col || BRICK }));
+    mesh.position.x = X(cx); mesh.position.z = Z(cy);
+    mesh.rotation.y = -rad(a);
+    mesh.castShadow = mesh.receiveShadow = true;
+    mesh.add(new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry), new THREE.LineBasicMaterial({ color: 0x6b5a45 })));
+    scene.add(mesh);
+    const j = ((Math.sin(i * 12.9898) * 43758.5453) % 1 + 1) % 1;
+    return { mesh, base: fl * FLOOR, varied: fl * FLOOR * (0.7 + j * 0.9) };
+  });
+  const nearBuilding = (px, py, m) => B.some(([cx, cy, w, d, a]) => {
+    const dx = px - cx, dy = py - cy, c = Math.cos(rad(a)), s = Math.sin(rad(a));
+    return Math.abs(dx * c + dy * s) < w / 2 + m && Math.abs(-dx * s + dy * c) < d / 2 + m;
+  });
+
+  // ---------- Jardins : [cx, cy, largeur, profondeur] ----------
+  const gardens = [[225,322,50,18],[445,470,45,30],[385,505,50,28],[110,556,70,30],[655,545,50,50],[665,308,40,22]];
+  const hedgeMat = new THREE.MeshLambertMaterial({ color: 0x3f7d3a });
+  const bedMat = new THREE.MeshLambertMaterial({ color: 0x6aa84f });
+  const flowerCols = [0xe53935, 0xfdd835, 0xec407a, 0xffffff, 0xab47bc];
+  gardens.forEach(([cx, cy, w, d]) => {
+    const g = new THREE.Group(); g.position.set(X(cx), CURB, Z(cy));
+    const W = w * S, D = d * S;
+    const bed = new THREE.Mesh(new THREE.BoxGeometry(W, 0.04, D), bedMat); bed.position.y = 0.02; bed.receiveShadow = true; g.add(bed);
+    [[0, D / 2, W, 0.12], [0, -D / 2, W, 0.12], [W / 2, 0, 0.12, D], [-W / 2, 0, 0.12, D]].forEach(([x, z, sx, sz]) => {
+      const h = new THREE.Mesh(new THREE.BoxGeometry(sx, 0.22, sz), hedgeMat); h.position.set(x, 0.11, z); h.castShadow = true; g.add(h);
+    });
+    for (let k = 0; k < 30; k++) {
+      const f = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 6), new THREE.MeshLambertMaterial({ color: flowerCols[(rnd() * 5) | 0] }));
+      f.position.set((rnd() - .5) * (W - 0.4), 0.08, (rnd() - .5) * (D - 0.4)); g.add(f);
+    }
+    scene.add(g);
+  });
+
+  // ---------- Arbres (instanciés) ----------
+  const treeGroup = new THREE.Group(); scene.add(treeGroup);
+  const spots = [];
+  const inGarden = (x, y) => gardens.some(([cx, cy, w, d]) => Math.abs(x - cx) < w / 2 + 4 && Math.abs(y - cy) < d / 2 + 4);
+  let tries = 0;
+  while (spots.length < 260 && tries++ < 20000) {
+    const px = 40 + rnd() * 680, py = 60 + rnd() * 630;
+    if (!islands.some(p => inPoly(p, px, py))) continue;
+    if (nearBuilding(px, py, 7) || inGarden(px, py)) continue;
+    if (lanes.some(([pts, w]) => pts.slice(1).some((p, i) => distSeg(px, py, pts[i], p) < w / 2 + 4))) continue;
+    spots.push([px, py]);
+  }
+  const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.05, 0.07, 1, 6), new THREE.MeshLambertMaterial({ color: 0x6d4c2f }), spots.length);
+  const crowns = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshLambertMaterial({ color: 0xffffff }), spots.length);
+  const o = new THREE.Object3D(), col = new THREE.Color();
+  spots.forEach(([px, py], i) => {
+    const h = 0.6 + rnd() * 0.5, r = 0.35 + rnd() * 0.3;
+    o.position.set(X(px), CURB + h / 2, Z(py)); o.scale.set(1, h, 1); o.updateMatrix(); trunks.setMatrixAt(i, o.matrix);
+    o.position.set(X(px), CURB + h + r * 0.7, Z(py)); o.scale.set(r, r * 1.1, r); o.updateMatrix(); crowns.setMatrixAt(i, o.matrix);
+    crowns.setColorAt(i, col.setHSL(0.27 + rnd() * 0.07, 0.5, 0.3 + rnd() * 0.12));
+  });
+  trunks.castShadow = crowns.castShadow = true;
+  treeGroup.add(trunks, crowns);
+
+  // ---------- Mosquée ----------
+  const mosq = new THREE.Mesh(new THREE.BoxGeometry(5, 1.2, 4), new THREE.MeshLambertMaterial({ color: 0xd0d0d0 }));
+  mosq.position.set(X(625), CURB + 0.6, Z(420)); mosq.castShadow = true; scene.add(mosq);
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(1.3, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshLambertMaterial({ color: 0x3f8f7a }));
+  dome.position.set(X(625), CURB + 1.2, Z(420)); dome.castShadow = true; scene.add(dome);
+  const mina = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.25, 4.5, 12), new THREE.MeshLambertMaterial({ color: 0xe6e6e6 }));
+  mina.position.set(X(650), CURB + 2.25, Z(405)); mina.castShadow = true; scene.add(mina);
+
+  // ---------- Étiquettes ----------
+  const labels = new THREE.Group(); scene.add(labels);
+  function label(txt, px, py, y) {
+    const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+    const g = c.getContext('2d'); g.font = 'bold 48px sans-serif'; g.textAlign = 'center'; g.fillStyle = '#222'; g.fillText(txt, 256, 76);
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true }));
+    s.scale.set(8, 2, 1); s.position.set(X(px), y, Z(py)); labels.add(s);
+  }
+  label('École Bousherit', 160, 265, 3.4);
+  label('Mosquée', 625, 420, 4.6);
+  label('CEM Amar', 690, 448, 3.2);
+  label('Base de vie chinoise', 465, 60, 1.5);
+
+  // ---------- Boutons ----------
+  let varied = true;
+  function applyHeights() {
+    buildings.forEach(b => { const h = varied ? b.varied : b.base; b.mesh.scale.y = h; b.mesh.position.y = CURB + h / 2; });
+  }
+  applyHeights();
+  document.getElementById('tHeights').onclick = () => { varied = !varied; applyHeights(); };
+  document.getElementById('tTrees').onclick = () => { treeGroup.visible = !treeGroup.visible; };
+  document.getElementById('tLabels').onclick = () => { labels.visible = !labels.visible; };
+
+  addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+  (function loop() { requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); })();
+})();
+</script>
+</body>
+</html>

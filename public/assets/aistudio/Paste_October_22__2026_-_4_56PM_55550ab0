@@ -1,0 +1,690 @@
+# PROMPT PRINCIPAL — DÉVELOPPEMENT COMPLET D'URBANRESILIENCE SIMLAB
+
+## 1. RÔLE ET MISSION
+
+Agis comme une équipe pluridisciplinaire composée de :
+- un ingénieur logiciel senior spécialisé en React, TypeScript et Node.js ;
+- un expert en simulation multi-agents et systèmes complexes ;
+- un spécialiste de la modélisation du risque de contamination en environnement extérieur ;
+- un architecte-urbaniste spécialisé en morphologie urbaine et espaces extérieurs ;
+- un ingénieur en visualisation scientifique et analyse statistique ;
+- un chercheur chargé de la vérification et de la reproductibilité des simulations.
+
+Ta mission est de CONSTRUIRE UNE APPLICATION WEB FONCTIONNELLE, et non simplement de proposer un prototype visuel ou une maquette.
+
+L'application doit permettre de paramétrer, exécuter, vérifier, comparer et exporter des simulations multi-agents consacrées à la qualité environnementale des espaces extérieurs de l'habitat collectif et à la résilience sanitaire.
+
+Nom du projet : UrbanResilience SimLab.
+
+Sous-titre : Simulation multi-agents, aménagement urbain et résilience sanitaire.
+
+Langue principale : français.
+
+Public cible : doctorants, chercheurs en architecture, urbanistes, ingénieurs et spécialistes de l'environnement.
+
+## 2. CONTEXTE SCIENTIFIQUE
+
+Le terrain d'étude est l'unité de voisinage 9 de la ville nouvelle Ali Mendjeli, Constantine, Algérie.
+
+Le projet étudie les relations entre :
+- la configuration spatiale des bâtiments et des rues ;
+- la végétation et les conditions microclimatiques ;
+- les flux piétonniers et la concentration des personnes ;
+- les visiteurs et l'activité d'un marché informel ;
+- les contacts entre individus ;
+- un modèle hypothétique de propagation d'une contamination.
+
+Le système doit comparer cinq scénarios d'aménagement urbain.
+
+IMPORTANT :
+Le modèle n'est pas calibré sur des données réelles d'infection. Les résultats doivent donc servir à comparer des tendances relatives entre scénarios, et non à prédire un nombre réel de personnes infectées.
+
+Ne présente jamais les résultats synthétiques comme des observations réelles.
+
+## 3. TECHNOLOGIES
+
+Utilise les technologies suivantes, compatibles avec l'environnement de développement Google AI Studio :
+
+- Frontend : React et TypeScript.
+- Interface : Tailwind CSS ou un système de composants cohérent.
+- Graphiques : Recharts ou une bibliothèque équivalente.
+- Carte et visualisation spatiale : SVG interactif ou Canvas.
+- Backend : Node.js et TypeScript lorsque nécessaire.
+- Calcul de simulation : moteur déterministe et reproductible avec générateur pseudo-aléatoire contrôlable.
+- Import et export : CSV, JSON et XLSX.
+- Tests : tests unitaires, tests d'intégration et tests des invariants du modèle.
+
+Privilégie un moteur de simulation local pour éviter les coûts inutiles et les dépendances externes pendant les calculs.
+
+N'utilise pas Gemini comme moteur de calcul scientifique. Gemini peut éventuellement aider à expliquer les résultats, mais les résultats numériques doivent provenir du moteur de simulation.
+
+Ne nécessite aucune clé API pour exécuter les simulations de base.
+
+## 4. ARCHITECTURE GÉNÉRALE
+
+Organise l'application en modules indépendants :
+
+1. Tableau de bord.
+2. Configuration du terrain urbain.
+3. Paramètres environnementaux.
+4. Gestion des agents.
+5. Moteur de simulation.
+6. Modèle de contacts.
+7. Modèle de contamination.
+8. Gestion des scénarios.
+9. Analyse de sensibilité.
+10. Réplications statistiques.
+11. Visualisation 2D et vue 3D simplifiée si réalisable.
+12. Comparaison des scénarios.
+13. Import et export des données.
+14. Vérification scientifique.
+15. Documentation des hypothèses.
+16. Gestion des expériences et historique des exécutions.
+
+Sépare clairement les composants d'interface, les paramètres, les équations scientifiques, le moteur de simulation et l'analyse statistique.
+
+Le modèle doit pouvoir évoluer sans nécessiter une réécriture complète.
+
+## 5. INTERFACE UTILISATEUR
+
+Crée une interface professionnelle, moderne, responsive et adaptée à un travail de recherche.
+
+Utilise :
+- une barre latérale de navigation ;
+- un en-tête affichant le nom du projet ;
+- des cartes d'indicateurs ;
+- des panneaux de configuration ;
+- des graphiques scientifiques ;
+- une zone de visualisation du terrain ;
+- des tableaux comparatifs ;
+- des fenêtres de validation et de confirmation.
+
+Le tableau de bord doit présenter :
+- le nombre d'agents ;
+- le nombre de contacts cumulés ;
+- le nombre de personnes dans l'état infectieux simulé ;
+- le pourcentage d'agents dans cet état ;
+- le nombre de visiteurs ;
+- le scénario actif ;
+- la durée simulée ;
+- l'état du calcul ;
+- le nombre de réplications terminées.
+
+Prévois les boutons suivants :
+- Nouvelle simulation ;
+- Démarrer ;
+- Pause ;
+- Reprendre ;
+- Arrêter ;
+- Réinitialiser ;
+- Comparer les scénarios ;
+- Lancer les réplications ;
+- Exporter les résultats ;
+- Consulter les hypothèses.
+
+Les boutons doivent être réellement fonctionnels.
+
+## 6. MODÈLE SPATIAL
+
+Crée une représentation schématique de l'unité de voisinage 9.
+
+Elle doit comprendre :
+- des bâtiments ;
+- des espaces extérieurs ;
+- des rues A, B, C et D ;
+- des zones végétalisées ;
+- une zone de marché informel ;
+- des entrées de visiteurs ;
+- des trajectoires piétonnes ;
+- des zones de concentration potentielle.
+
+Permets à l'utilisateur de modifier la disposition schématique, les obstacles, les zones végétalisées, les entrées et la localisation du marché.
+
+Utilise une représentation SVG interactive si cela facilite la sélection et le déplacement des éléments.
+
+Ne prétends pas reproduire exactement le terrain réel sans plan géoréférencé fourni.
+
+Si aucun plan réel n'est importé, affiche clairement « Géométrie illustrative — à remplacer par le plan du terrain ».
+
+## 7. PARAMÈTRES DU MODÈLE
+
+Tous les paramètres doivent être centralisés dans une configuration de scénario.
+
+Paramètres environnementaux :
+- Température de l'air, en °C.
+- Humidité relative, en %.
+- Vitesse du vent, en m/s.
+- Présence de végétation : oui/non.
+- Densité de végétation, si elle est disponible.
+- Conditions environnementales par tranche horaire.
+
+Paramètres humains :
+- Population initiale.
+- Flux piétonnier par rue, en personnes/heure.
+- Nombre de visiteurs.
+- Localisation des entrées.
+- Vitesse de déplacement des agents.
+- Durée de contact.
+- Distance de contact configurable, en mètres.
+
+Paramètres temporels :
+- Heure de début : 9 h.
+- Heure de fin : 18 h.
+- Durée : 9 heures.
+- Pas de temps du modèle : une minute.
+- Nombre total de pas : 540.
+- Graine aléatoire.
+
+Les valeurs initiales doivent être modifiables.
+
+Les données réelles seront importées lorsqu'elles seront disponibles : valeurs ENVI-met à 9 h, 13 h et 18 h, population, flux piétonniers, observations de terrain et recommandations d'aménagement.
+
+Les données manquantes doivent être signalées. Ne les remplace pas silencieusement par des mesures inventées.
+
+## 8. MODÈLE DES AGENTS
+
+Chaque agent piéton doit posséder au minimum :
+- un identifiant unique ;
+- une position x, y ;
+- une vitesse de déplacement ;
+- une rue ou zone de circulation ;
+- un état sanitaire simulé ;
+- un historique ou un compteur de contacts ;
+- une heure d'entrée ;
+- une durée de présence ;
+- une origine et une destination, si disponibles.
+
+États sanitaires possibles :
+- S : susceptible ;
+- I : infectieux dans le modèle ;
+- R : retiré du processus de transmission, si cet état est retenu.
+
+L'utilisateur doit pouvoir choisir un modèle SI ou SIR.
+
+L'état initial doit être configurable. Par défaut, ne considère qu'une faible fraction initiale comme infectieuse, mais laisse ce paramètre explicite et modifiable.
+
+Ne commence jamais automatiquement avec 80 % d'agents infectieux.
+
+Permets aux agents de :
+- se déplacer dans les zones accessibles ;
+- suivre des itinéraires ;
+- éviter les bâtiments et les obstacles ;
+- entrer et sortir de la zone ;
+- se concentrer dans certaines rues ;
+- interagir avec les autres agents.
+
+Le comportement des agents doit dépendre des flux piétonniers et de la géométrie.
+
+Les agents ne doivent pas traverser les bâtiments ou apparaître de façon incohérente.
+
+## 9. MODÈLE DE CONTACT
+
+Définis un contact physique ou une proximité comme un événement calculable entre deux agents.
+
+La distance doit être calculée à partir de leurs positions :
+
+d(i,j) = sqrt((x_i - x_j)^2 + (y_i - y_j)^2)
+
+Le seuil de contact doit être configurable.
+
+Propose une valeur de référence de 2 mètres pour les analyses de proximité, tout en permettant de tester d'autres distances.
+
+Distingue deux indicateurs :
+
+A. Contacts de proximité : nombre de paires d'agents respectant le seuil au cours d'un pas de temps.
+
+B. Épisodes de contact : événements continus entre une même paire, avec une durée cumulée.
+
+Évite de compter plusieurs fois un même épisode sans le signaler.
+
+Si un même couple reste en contact pendant plusieurs minutes, enregistre la durée et distingue le nombre de paires uniques du nombre d'événements de contact.
+
+Le calcul doit être effectué à chaque pas de temps.
+
+Pour les grandes populations, utilise si nécessaire une grille spatiale ou une structure de voisinage afin d'éviter de comparer inutilement toutes les paires.
+
+## 10. MODÈLE DE CONTAMINATION
+
+Implémente une fonction de risque configurable :
+
+p_contact = p_base × f_distance(d) × f_climat(T,RH) × f_vent(v) × f_végétation(g) × f_durée(t)
+
+où :
+- p_base est un paramètre hypothétique ;
+- d est la distance ;
+- T est la température ;
+- RH est l'humidité relative ;
+- v est la vitesse du vent ;
+- g représente les caractéristiques de végétation ;
+- t représente la durée d'exposition.
+
+Chaque facteur doit être implémenté dans un module séparé.
+
+Toutes les fonctions doivent :
+- être documentées ;
+- respecter leurs domaines de validité ;
+- produire des valeurs comprises entre 0 et 1 si elles représentent des multiplicateurs de probabilité ;
+- gérer les données manquantes ;
+- permettre des tests unitaires.
+
+La probabilité finale doit rester comprise entre 0 et 1.
+
+ATTENTION AUX UNITÉS :
+Si p_base est défini comme un risque par minute, sa combinaison avec la durée d'exposition doit être cohérente. Ne multiplie pas arbitrairement une probabilité par une durée sans définir la formule.
+
+Tu peux utiliser une probabilité cumulative sur un intervalle d'exposition, par exemple :
+
+P = 1 - exp(-lambda × D)
+
+où lambda est un taux de risque hypothétique par unité de temps et D la durée d'exposition dans la même unité.
+
+Utilise cette formulation uniquement si les hypothèses du modèle le justifient et documente le choix.
+
+Les effets du vent, de la température, de l'humidité et de la végétation ne doivent pas être présentés comme des lois universelles.
+
+Les fonctions climatiques et les coefficients doivent être paramétrables. Leurs valeurs par défaut doivent être marquées « hypothèse illustrative non calibrée ».
+
+Ne prétends pas que des coefficients numériques proviennent de la littérature si leurs valeurs exactes n'ont pas été vérifiées dans les sources.
+
+Prévois un mécanisme d'activation et de désactivation de chaque facteur pour l'analyse de sensibilité.
+
+Si la transmission par les surfaces est activée, implémente-la comme un module distinct avec ses propres paramètres et hypothèses.
+
+Ne mélange pas automatiquement le risque de transmission par l'air et celui par les surfaces.
+
+## 11. MISE À JOUR DES ÉTATS
+
+À chaque pas de temps :
+1. Actualiser les conditions de déplacement des agents.
+2. Déplacer les agents.
+3. Calculer les proximités.
+4. Mettre à jour les durées de contact.
+5. Identifier les contacts impliquant un agent infectieux.
+6. Calculer le risque de transmission selon le modèle activé.
+7. Effectuer le tirage aléatoire reproductible.
+8. Mettre à jour les états sanitaires.
+9. Enregistrer les indicateurs.
+10. Actualiser les graphiques.
+
+Un agent ne doit pas être infecté plusieurs fois.
+
+Définis clairement le moment où les nouveaux états prennent effet afin d'éviter les contaminations en cascade accidentelles dans un même pas de temps.
+
+Utilise une graine aléatoire contrôlable et stocke-la avec chaque exécution.
+
+## 12. LES CINQ SCÉNARIOS
+
+Implémente exactement les scénarios suivants.
+
+S0 — État existant :
+Configuration de référence utilisant les données disponibles du terrain.
+
+S1 — Végétation :
+Ajout d'arbres selon les recommandations de conception.
+Modifie les zones végétalisées et les paramètres climatiques uniquement si des données justifient ces modifications.
+
+S2 — Flux réorganisés :
+Réduction du flux sur l'axe commercial et redistribution vers les autres rues selon les paramètres définis.
+
+S3 — Marché déplacé :
+Déplacement du point d'attraction du marché et redistribution des entrées de visiteurs.
+
+S4 — Combinaison :
+Application combinée des modifications S1, S2 et S3.
+
+Chaque scénario doit être indépendant.
+
+Les paramètres restent fixes pendant toute l'exécution d'un scénario, sauf lorsque des variations temporelles sont explicitement prévues dans les données environnementales.
+
+Ne modifie jamais automatiquement les paramètres d'un scénario déjà en cours.
+
+Conserve une copie immuable de la configuration utilisée pour chaque exécution.
+
+## 13. GESTION DU TEMPS
+
+Une simulation complète dure 9 heures, de 9 h à 18 h.
+
+Le pas de temps est d'une minute.
+
+Convertis correctement le temps simulé en heure réelle.
+
+Les observations environnementales sont disponibles à 9 h, 13 h et 18 h.
+
+Permets de sélectionner une méthode d'interpolation entre ces observations :
+- maintien de la dernière valeur connue ;
+- interpolation linéaire.
+
+Affiche la méthode choisie dans les résultats.
+
+Ne présente pas les valeurs interpolées comme des mesures directement observées.
+
+## 14. EXPÉRIENCES ET RÉPLICATIONS
+
+Crée trois modes.
+
+Mode A : Simulation unique.
+Permet de visualiser une exécution et de tester le fonctionnement.
+
+Mode B : Analyse de sensibilité.
+Modifie un seul paramètre à la fois, avec possibilité de comparer les résultats.
+
+Mode C : Comparaison statistique.
+Exécute 20 à 30 réplications indépendantes par scénario.
+
+La graine aléatoire doit être différente entre les réplications, mais enregistrée pour chaque exécution.
+
+Propose par défaut 30 réplications, avec possibilité de choisir 20 ou 25.
+
+Ne réutilise pas les résultats d'une exécution précédente lorsque les paramètres ont changé.
+
+Permets d'utiliser des graines communes entre scénarios pour une analyse comparative appariée, si cela est méthodologiquement pertinent.
+
+Présente la moyenne, l'écart-type, la médiane et les quantiles lorsque cela est utile.
+
+Calcule des intervalles d'incertitude pour les différences entre scénarios si les données le permettent.
+
+Ne confonds pas l'écart-type entre réplications avec l'incertitude sur la moyenne.
+
+## 15. INDICATEURS À ENREGISTRER
+
+À chaque minute, enregistre :
+- identifiant de l'expérience ;
+- scénario ;
+- numéro de réplication ;
+- graine aléatoire ;
+- temps simulé ;
+- heure réelle ;
+- population présente ;
+- nombre d'agents susceptibles ;
+- nombre d'agents infectieux simulés ;
+- nombre d'agents retirés, si le modèle SIR est activé ;
+- nombre de contacts de proximité ;
+- nombre de paires uniques en contact ;
+- nombre d'épisodes de contact ;
+- nouveaux événements de contamination simulée ;
+- pourcentage d'agents dans l'état infectieux ;
+- température ;
+- humidité relative ;
+- vitesse du vent ;
+- flux piétonniers par rue ;
+- nombre de visiteurs présents.
+
+Distingue toujours :
+- contacts instantanés ;
+- contacts cumulés ;
+- personnes infectieuses ;
+- nouveaux événements de contamination ;
+- proportion de personnes infectieuses.
+
+Ne confonds pas un contact avec une contamination.
+
+## 16. VISUALISATIONS SCIENTIFIQUES
+
+Crée les graphiques suivants.
+
+Graphique 1 :
+Évolution temporelle du nombre de contacts pour S0, S1, S2, S3 et S4.
+
+Graphique 2 :
+Évolution temporelle du nombre d'agents infectieux simulés pour les cinq scénarios.
+
+Graphique 3 :
+Évolution temporelle du pourcentage d'agents infectieux.
+
+Graphique 4 :
+Moyenne des contacts entre réplications, avec bande d'incertitude ou d'écart-type clairement identifiée.
+
+Graphique 5 :
+Comparaison finale des indicateurs par scénario.
+
+Graphique 6 :
+Analyse de sensibilité aux distances, aux flux piétonniers, au vent, à la végétation et aux paramètres de contamination.
+
+Graphique 7 :
+Répartition spatiale des contacts sur la carte.
+
+Utilise des axes avec des unités explicites, des légendes lisibles et des couleurs cohérentes.
+
+Permets d'afficher ou de masquer les scénarios.
+
+Les figures doivent être exportables en PNG ou SVG lorsque possible.
+
+## 17. COMPARAISON DES SCÉNARIOS
+
+Utilise S0 comme référence.
+
+Pour chaque scénario, calcule la variation relative :
+
+Variation (%) = 100 × (valeur_scenario - valeur_S0) / valeur_S0
+
+Si la valeur de référence est nulle, affiche « non calculable » plutôt que de diviser par zéro.
+
+Produis un tableau contenant :
+- scénario ;
+- nombre final de contacts ;
+- moyenne des contacts cumulés ;
+- nombre final d'agents infectieux simulés ;
+- pourcentage final d'agents infectieux ;
+- variation des contacts par rapport à S0 ;
+- variation des agents infectieux par rapport à S0 ;
+- écart-type ;
+- nombre de réplications valides.
+
+Ne classe pas automatiquement les scénarios comme scientifiquement meilleurs sans définir un critère explicite.
+
+Signale les scénarios qui réduisent les contacts mais augmentent d'autres indicateurs, le cas échéant.
+
+## 18. IMPORTATION DES DONNÉES
+
+Permets d'importer des fichiers CSV et XLSX.
+
+Prévois des modules d'import pour :
+- les données ENVI-met ;
+- les observations piétonnes ;
+- les flux par rue ;
+- les données de population ;
+- les plans et coordonnées disponibles.
+
+Vérifie :
+- les noms de colonnes ;
+- les unités ;
+- les valeurs manquantes ;
+- les doublons ;
+- les valeurs hors plage ;
+- les formats de date et d'heure.
+
+Affiche un aperçu des données avant leur validation.
+
+Ne remplace pas les valeurs manquantes par zéro sans confirmation.
+
+Si les données requises ne sont pas présentes, propose un jeu synthétique clairement marqué « données de démonstration ».
+
+N'écrase jamais les données originales.
+
+## 19. EXPORTS
+
+Crée un export CSV contenant une ligne par pas de temps et par réplication.
+
+Crée également un fichier XLSX contenant au minimum :
+- Feuille 1 : paramètres et hypothèses ;
+- Feuille 2 : résultats temporels ;
+- Feuille 3 : statistiques par scénario ;
+- Feuille 4 : analyse de sensibilité ;
+- Feuille 5 : dictionnaire des variables.
+
+Permets d'exporter les résultats au format JSON pour garantir la reproductibilité.
+
+Chaque export doit inclure la date d'exécution, la version du moteur, les paramètres, les graines et les éventuelles erreurs.
+
+Les exports doivent contenir de vrais résultats calculés par l'application.
+
+## 20. VÉRIFICATION SCIENTIFIQUE ET TESTS
+
+Implémente une page de validation du modèle.
+
+Tests minimaux :
+
+Test 1 :
+Augmenter la distance de contact doit diminuer ou maintenir le nombre de contacts, toutes choses égales par ailleurs dans un test contrôlé.
+
+Test 2 :
+Doubler un flux piétonnier doit généralement augmenter les occasions de contact, mais le résultat dépend de la géométrie et des déplacements.
+
+Test 3 :
+Supprimer les visiteurs doit supprimer leur contribution aux contacts.
+
+Test 4 :
+Un scénario avec un taux de contamination nul ne doit produire aucune nouvelle contamination.
+
+Test 5 :
+Un scénario sans agent infectieux initial ne doit produire aucune nouvelle contamination dans un modèle de transmission dépendant exclusivement des agents infectieux.
+
+Test 6 :
+La probabilité de contamination ne doit jamais sortir de l'intervalle [0,1].
+
+Test 7 :
+La simulation doit être reproductible lorsque la configuration et la graine sont identiques.
+
+Test 8 :
+La durée simulée doit correspondre exactement à 540 pas d'une minute.
+
+Test 9 :
+Les paramètres d'un scénario doivent rester fixes pendant son exécution, sauf variation temporelle documentée.
+
+Test 10 :
+Les effectifs par état doivent respecter les règles du modèle et ne jamais dépasser la population présente.
+
+Affiche la réussite ou l'échec de chaque test.
+
+Si un test échoue, explique la cause et corrige le code.
+
+Ne déclare jamais une validation réussie si le test n'a pas été exécuté.
+
+## 21. DOCUMENTATION SCIENTIFIQUE
+
+Génère automatiquement une documentation méthodologique décrivant :
+- les hypothèses du modèle ;
+- la définition des agents ;
+- les règles de déplacement ;
+- la définition d'un contact ;
+- les règles de transmission ;
+- les coefficients et leurs unités ;
+- les paramètres issus du terrain ;
+- les paramètres hypothétiques ;
+- la gestion des graines aléatoires ;
+- le protocole de réplication ;
+- les limites du modèle ;
+- les tests de vérification ;
+- les indicateurs exportés.
+
+Prévois une bibliographie configurable avec les références suivantes à vérifier avant toute attribution de coefficient :
+- Guo et al. (2021) ;
+- Megahed et Ghoneim (2020) ;
+- Chan et al. (2011) ;
+- Feng et al. (2020) ;
+- Qian et Zheng (2018) ;
+- Bowler et al. (2010).
+
+Ne fabrique ni titres d'articles, ni DOI, ni citations exactes.
+
+Distingue la vérification informatique, la validation empirique et la calibration.
+
+La documentation doit préciser que le modèle n'est pas calibré sur des données réelles d'infection.
+
+## 22. INTÉGRATION ÉVENTUELLE AVEC ANYLOGIC
+
+L'application doit pouvoir fonctionner indépendamment.
+
+Prévois une architecture qui facilite une future intégration avec le modèle AnyLogic existant.
+
+Ne prétends pas ouvrir, exécuter ou modifier un fichier .alp sans mécanisme d'intégration réellement disponible.
+
+Prévois :
+- un dictionnaire de correspondance entre les paramètres de l'application et ceux d'AnyLogic ;
+- un format d'échange CSV/JSON ;
+- une validation des colonnes et des unités ;
+- un adaptateur d'import des résultats AnyLogic ;
+- une distinction explicite entre résultats produits par le moteur autonome et résultats importés depuis AnyLogic.
+
+Si un fichier .alp est fourni ultérieurement, commence par analyser ce qui est réellement accessible avant de proposer des modifications.
+
+## 23. EXIGENCES DE QUALITÉ LOGICIELLE
+
+Le projet doit être organisé en fichiers et modules clairs.
+
+Utilise des types TypeScript pour les agents, scénarios, paramètres, résultats et expériences.
+
+Évite :
+- les boutons décoratifs ;
+- les données fictives présentées comme réelles ;
+- les paramètres qui changent sans explication ;
+- les graphiques déconnectés du moteur ;
+- les calculs dupliqués ;
+- les divisions par zéro ;
+- les erreurs silencieuses ;
+- les coefficients scientifiques inventés.
+
+Ajoute une gestion des erreurs, un indicateur de progression des simulations et une possibilité d'annuler les calculs longs.
+
+Vérifie les performances avec une population paramétrable.
+
+## 24. ORDRE DE DÉVELOPPEMENT
+
+Développe le projet dans cet ordre :
+
+Phase 1 : Architecture et interface générale.
+
+Phase 2 : Configuration du terrain, des agents et des paramètres.
+
+Phase 3 : Moteur de déplacement et calcul des contacts.
+
+Phase 4 : États sanitaires et module de contamination.
+
+Phase 5 : Scénarios S0 à S4.
+
+Phase 6 : Réplications et analyse statistique.
+
+Phase 7 : Graphiques et visualisation spatiale.
+
+Phase 8 : Importation et exportation CSV/XLSX/JSON.
+
+Phase 9 : Tests scientifiques et correction des erreurs.
+
+Phase 10 : Documentation et préparation du déploiement.
+
+À chaque phase :
+1. Écris le code nécessaire.
+2. Vérifie la compilation.
+3. Exécute les tests disponibles.
+4. Corrige les erreurs détectées.
+5. Vérifie que les fonctionnalités précédentes continuent de fonctionner.
+
+Ne t'arrête pas à une description, un plan ou une maquette. Implémente les fonctionnalités dans le projet.
+
+## 25. LIVRABLE FINAL
+
+Le résultat attendu est une application utilisable comprenant :
+- une interface web complète ;
+- un moteur de simulation ;
+- cinq scénarios comparables ;
+- des agents mobiles ;
+- un modèle de contacts ;
+- un module de contamination paramétrable ;
+- des expériences répétées ;
+- des graphiques scientifiques ;
+- un tableau de comparaison ;
+- l'importation des données ;
+- les exports CSV, XLSX et JSON ;
+- les tests de vérification ;
+- la documentation méthodologique ;
+- un projet organisé, exécutable et prêt à être amélioré.
+
+Commence maintenant par construire la première version fonctionnelle complète. Priorise la justesse des calculs, la traçabilité des hypothèses, la reproductibilité et l'utilité scientifique plutôt que les effets visuels.
+
+À la fin, indique précisément :
+1. Les fonctionnalités réellement implémentées.
+2. Les tests effectivement exécutés et leurs résultats.
+3. Les hypothèses restant à confirmer.
+4. Les données réelles encore nécessaires.
+5. Les limites connues.
+6. Les étapes nécessaires pour déployer l'application.

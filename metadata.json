@@ -1,0 +1,6 @@
+{
+  "name": "UrbanResilience SimLab",
+  "description": "Simulation multi-agents, aménagement urbain et résilience sanitaire — UV9 Ali Mendjeli Constantine",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

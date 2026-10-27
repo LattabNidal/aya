@@ -1,0 +1,8 @@
+# Material library for conceptual urban site
+newmtl SiteUrbain
+Ka 0.200000 0.200000 0.200000
+Kd 0.750000 0.750000 0.750000
+Ks 0.100000 0.100000 0.100000
+Ns 20.000000
+d 1.000000
+illum 2
