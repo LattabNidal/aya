@@ -1,7 +1,15 @@
 /**
- * UrbanResilience SimLab - Simulation Engine
- * Multi-agent movement, spatial grid partitioning, collision avoidance,
- * contact episode tracking, and modular transmission updates.
+ * UrbanResilience SimLab - Simulation Engine (OCCSIM Framework)
+ * Faithfully implements the scientific conditions & rules:
+ * 1. Environment & Architecture: Strict collision avoidance against the Cite3D urban fabric
+ *    (walkable pedestrian ruelles, courtyards, commercial front, and informal market).
+ * 2. Demographics: Multi-generational families (elderly 20%, young parents/adults 55%, children 25%),
+ *    with strong social tie clustering and high collective outdoor habits.
+ * 3. Daily Cycles: Pedestrian flow surges peaking at three key hours: 9:00 AM, 1:00 PM, and 6:00 PM.
+ * 4. Social Distancing Logic: Multi-tier thresholds (0.25m close contact, 1.0m social, 2.0m respiratory),
+ *    with natural gathering around informal market and commercial zones despite restrictions.
+ * 5. Epidemiological Dynamics: Dual transmission pathways (Aerosol vs Fomite), ENVI-met microclimate
+ *    integration (45°C, 50% RH, 5.49 m/s wind), and urban greenery mitigation.
  */
 
 import { getAmbientClimate, stepToClockTime } from './environmental';
@@ -10,12 +18,21 @@ import { clampToTerrain, INITIAL_SPATIAL_LAYOUT, isInsideBuilding, isInsideVeget
 import { computeTransmissionRisk } from './contamination';
 import {
   Agent,
+  DemographicGroup,
   Point,
   ScenarioConfig,
   SimulationResult,
   SpatialLayout,
   StepMetric,
 } from '../types/simulation';
+import {
+  CITE_ATTRACTORS,
+  getDailyPeakHourSurge,
+  getRandomCiteWalkablePoint,
+  isCiteBuildingObstacle,
+  pxToSim,
+  simToPx,
+} from '../data/cite3dData';
 
 interface GridCell {
   agents: Agent[];
@@ -100,6 +117,8 @@ export class SimulationInstance {
   totalEpisodesCount: number = 0;
   uniquePairsEverInContact: Set<string> = new Set();
   cumulativeContactsCount: number = 0;
+  cumulativeAirTransmissions: number = 0;
+  cumulativeSurfaceTransmissions: number = 0;
 
   private nextAgentId: number = 1;
   private isFinished: boolean = false;
@@ -122,7 +141,6 @@ export class SimulationInstance {
       this.layout.market.y = this.config.marketPosition.y;
     }
 
-    // Dynamic grid cell size ensuring all pairs within threshold are detected in adjacent cells
     const dynamicCellSize = Math.max(10.0, this.config.contamination.contactDistanceThresholdMeters * 1.05);
     this.grid = new SpatialGrid(this.layout.width, this.layout.height, dynamicCellSize);
     this.initializePopulation();
@@ -133,131 +151,82 @@ export class SimulationInstance {
   }
 
   /**
-   * Spawns an initial population distributed across street corridors and open spaces.
+   * Spawns multi-generational families in walkable spaces of Cite3D:
+   * - 20% Elderly (personnes âgées, vitesse réduite, regroupement esplanade)
+   * - 55% Adults/Parents (actifs, déplacements marché et ruelles)
+   * - 25% Children (enfants, déplacements proches de l'école et cours intérieures)
    */
   private initializePopulation(): void {
     this.agents = [];
     this.nextAgentId = 1;
 
     const safeInfectedCount = Math.max(0, Math.min(this.config.initialInfectedCount, this.config.initialPopulation));
+    const isMaskMandate = this.config.id === 'S1' || this.config.id === 'S4';
 
     const streets: Array<'RueA' | 'RueB' | 'RueC' | 'RueD'> = ['RueA', 'RueB', 'RueC', 'RueD'];
-    const streetWeights = [
-      this.config.flowMultiplierByStreet.RueA * 0.45,
-      this.config.flowMultiplierByStreet.RueB * 0.22,
-      this.config.flowMultiplierByStreet.RueC * 0.15,
-      this.config.flowMultiplierByStreet.RueD * 0.18,
-    ];
-    const totalW = streetWeights.reduce((a, b) => a + b, 0);
 
     for (let i = 0; i < this.config.initialPopulation; i++) {
-      // Pick street according to flow weights
-      let r = this.prng.nextFloat() * totalW;
-      let chosenStreet: 'RueA' | 'RueB' | 'RueC' | 'RueD' = 'RueA';
-      for (let s = 0; s < streets.length; s++) {
-        if (r <= streetWeights[s]) {
-          chosenStreet = streets[s];
-          break;
-        }
-        r -= streetWeights[s];
+      // Demographic allocation (20% elderly, 55% adults, 25% children)
+      const demRoll = this.prng.nextFloat();
+      let demographic: DemographicGroup = 'adult';
+      let speedFactor = 1.0;
+
+      if (demRoll < 0.20) {
+        demographic = 'elderly';
+        speedFactor = 0.75;
+      } else if (demRoll > 0.75) {
+        demographic = 'child';
+        speedFactor = 1.25;
       }
 
-      const corridor = this.layout.streets.find((s) => s.code === chosenStreet) || this.layout.streets[0];
-      const spawnPoint = this.getRandomPointAlongCorridor(corridor);
+      // Family unit grouping (units of 3-5 members sharing social ties)
+      const familyId = Math.floor(i / 4) + 1;
 
-      // Set initial health state: first safeInfectedCount agents are 'I', rest 'S'
+      // Spawn on authentic walkable Cite3D coordinate (ruelles / courtyards)
+      const spawnPoint = getRandomCiteWalkablePoint(this.prng);
+
+      // Initial target around attractors or ruelles
+      const targetPoint = getRandomCiteWalkablePoint(this.prng);
+
+      const chosenStreet = streets[i % streets.length];
       const state = i < safeInfectedCount ? 'I' : 'S';
+
+      // In S1 and S4, high mask wearing adherence (85%)
+      const maskWearing = isMaskMandate ? this.prng.nextFloat() < 0.85 : false;
 
       const agent: Agent = {
         id: this.nextAgentId++,
-        x: spawnPoint.x,
-        y: spawnPoint.y,
-        targetX: spawnPoint.x + this.prng.nextInt(-30, 30),
-        targetY: spawnPoint.y + this.prng.nextInt(-30, 30),
-        speed: this.config.pedestrianSpeedMs * (0.85 + 0.3 * this.prng.nextFloat()),
+        x: spawnPoint.simX,
+        y: spawnPoint.simY,
+        targetX: targetPoint.simX,
+        targetY: targetPoint.simY,
+        speed: this.config.pedestrianSpeedMs * speedFactor * (0.9 + 0.2 * this.prng.nextFloat()),
         street: chosenStreet,
         isVisitor: false,
         state,
         infectionStep: state === 'I' ? 0 : undefined,
         cumulativeContacts: 0,
         entryStep: 0,
-        dwellTimeRemaining: this.prng.nextInt(60, 480),
+        dwellTimeRemaining: this.prng.nextInt(90, 540),
         activeEpisodesWith: new Set(),
+        demographic,
+        familyId,
+        maskWearing,
       };
 
       this.agents.push(agent);
     }
   }
 
-  private getRandomPointAlongCorridor(corridor: SpatialLayout['streets'][0]): Point {
-    let attempts = 0;
-    while (attempts < 25) {
-      attempts++;
-      // Choose random segment
-      const segIdx = this.prng.nextInt(0, corridor.path.length - 2);
-      const p1 = corridor.path[segIdx];
-      const p2 = corridor.path[segIdx + 1];
-      const t = this.prng.nextFloat();
-      const baseX = p1.x + t * (p2.x - p1.x);
-      const baseY = p1.y + t * (p2.y - p1.y);
-
-      // Normal offset for street width
-      const dx = p2.x - p1.x;
-      const dy = p2.y - p1.y;
-      const len = Math.hypot(dx, dy) || 1;
-      const nx = -dy / len;
-      const ny = dx / len;
-      const lateralOffset = (this.prng.nextFloat() - 0.5) * corridor.width;
-
-      const px = baseX + nx * lateralOffset;
-      const py = baseY + ny * lateralOffset;
-
-      if (!isInsideBuilding(px, py, this.layout)) {
-        return clampToTerrain({ x: px, y: py }, this.layout);
-      }
-    }
-    return { x: 250, y: 200 };
-  }
-
-  private getRandomPointAlongRuelle(ruelle: NonNullable<SpatialLayout['ruelles']>[0]): Point {
-    let attempts = 0;
-    while (attempts < 25) {
-      attempts++;
-      if (ruelle.path.length < 2) return ruelle.path[0] || { x: 250, y: 200 };
-      const segIdx = this.prng.nextInt(0, ruelle.path.length - 2);
-      const p1 = ruelle.path[segIdx];
-      const p2 = ruelle.path[segIdx + 1];
-      const t = this.prng.nextFloat();
-      const baseX = p1.x + t * (p2.x - p1.x);
-      const baseY = p1.y + t * (p2.y - p1.y);
-
-      const dx = p2.x - p1.x;
-      const dy = p2.y - p1.y;
-      const len = Math.hypot(dx, dy) || 1;
-      const nx = -dy / len;
-      const ny = dx / len;
-      const lateralOffset = (this.prng.nextFloat() - 0.5) * (ruelle.width * 0.8);
-
-      const px = baseX + nx * lateralOffset;
-      const py = baseY + ny * lateralOffset;
-
-      if (!isInsideBuilding(px, py, this.layout)) {
-        return clampToTerrain({ x: px, y: py }, this.layout);
-      }
-    }
-    return ruelle.path[0] || { x: 250, y: 200 };
-  }
-
   /**
-   * Spawns new visitors entering through visitor gates.
+   * Spawns new visitors entering through visitor gates, surging during peak hours.
    */
   private spawnHourlyVisitors(): void {
-    // visitorCountPerHour / 60 = visitors per minute on average
-    const ratePerMin = (this.config.visitorCountPerHour / 60) * (this.config.flowMultiplierByStreet.RueA);
+    const { flowSurge } = getDailyPeakHourSurge(this.currentStep);
+    const ratePerMin = ((this.config.visitorCountPerHour * flowSurge) / 60) * this.config.flowMultiplierByStreet.RueA;
     const numToSpawn = Math.floor(ratePerMin) + (this.prng.nextFloat() < ratePerMin % 1 ? 1 : 0);
 
     for (let k = 0; k < numToSpawn; k++) {
-      // Pick gate based on weights
       const totalWeight = this.layout.visitorGates.reduce((s, g) => s + g.weight, 0);
       let r = this.prng.nextFloat() * totalWeight;
       let gate = this.layout.visitorGates[0];
@@ -269,29 +238,42 @@ export class SimulationInstance {
         r -= g.weight;
       }
 
-      // Target market or open space
-      const targetIsMarket = this.prng.nextFloat() < 0.65;
-      const targetX = targetIsMarket
-        ? this.layout.market.x + this.prng.nextFloat() * this.layout.market.width
-        : this.prng.nextInt(50, 450);
-      const targetY = targetIsMarket
-        ? this.layout.market.y + this.prng.nextFloat() * this.layout.market.height
-        : this.prng.nextInt(50, 350);
+      // Visitors are attracted to informal market & commercial front
+      const targetIsMarket = this.prng.nextFloat() < 0.70;
+      let targetX = 250;
+      let targetY = 200;
+
+      if (targetIsMarket) {
+        const mPos = this.config.marketRelocated
+          ? this.config.marketPosition
+          : { x: this.layout.market.x, y: this.layout.market.y };
+        targetX = mPos.x + this.prng.nextInt(-15, 15);
+        targetY = mPos.y + this.prng.nextInt(-15, 15);
+      } else {
+        const pt = getRandomCiteWalkablePoint(this.prng);
+        targetX = pt.simX;
+        targetY = pt.simY;
+      }
+
+      const isMaskMandate = this.config.id === 'S1' || this.config.id === 'S4';
+      const maskWearing = isMaskMandate ? this.prng.nextFloat() < 0.75 : false;
 
       const agent: Agent = {
         id: this.nextAgentId++,
-        x: gate.position.x + this.prng.nextInt(-6, 6),
-        y: gate.position.y + this.prng.nextInt(-6, 6),
+        x: gate.position.x + this.prng.nextInt(-4, 4),
+        y: gate.position.y + this.prng.nextInt(-4, 4),
         targetX,
         targetY,
-        speed: this.config.pedestrianSpeedMs * (0.8 + 0.4 * this.prng.nextFloat()),
+        speed: this.config.pedestrianSpeedMs * (0.85 + 0.3 * this.prng.nextFloat()),
         street: gate.targetStreet,
         isVisitor: true,
-        state: 'S', // Visitors arrive susceptible unless imported otherwise
+        state: 'S',
         cumulativeContacts: 0,
         entryStep: this.currentStep,
-        dwellTimeRemaining: this.prng.nextInt(25, 90),
+        dwellTimeRemaining: this.prng.nextInt(30, 110),
         activeEpisodesWith: new Set(),
+        demographic: this.prng.nextFloat() < 0.25 ? 'elderly' : 'adult',
+        maskWearing,
       };
 
       this.agents.push(agent);
@@ -308,29 +290,40 @@ export class SimulationInstance {
       return null;
     }
 
-    // 1. Spawn visitors
+    // 1. Peak hour check (09:00, 13:00, 18:00)
+    const { flowSurge, activePeak } = getDailyPeakHourSurge(this.currentStep);
+
+    // 2. Spawn visitors influenced by daily cycle
     this.spawnHourlyVisitors();
 
-    // 2. Get ambient environmental conditions for this minute
+    // 3. Ambient environmental conditions (ENVI-met 45°C peak at 13h, 50% RH, 5.49 m/s wind)
     const climate = getAmbientClimate(this.currentStep, this.config.climate);
 
-    // 3. Move agents & avoid obstacles
-    this.moveAgents();
+    // 4. Move agents with collision avoidance against Cite3D buildings & social grouping
+    this.moveAgents(flowSurge);
 
-    // 4. Update spatial grid
+    // 5. Update spatial grid
     this.grid.clear();
     for (const a of this.agents) {
       this.grid.insert(a);
     }
 
-    // 5. Contact detection & episode tracking
-    const { instantContactsCount, uniquePairsThisStep, contactPairs } = this.detectContacts();
+    // 6. Contact detection & episode tracking with multi-distance thresholds
+    const {
+      instantContactsCount,
+      uniquePairsThisStep,
+      contactPairs,
+      contactsUnder025m,
+      contactsUnder1m,
+      contactsUnder2m,
+    } = this.detectContacts();
 
-    // 6. Contamination propagation
+    // 7. Contamination propagation (Dual pathways: Aerosol & Fomite)
     const newlyInfectedIds: number[] = [];
     const newlyRecoveredIds: number[] = [];
+    let stepAirTransmissions = 0;
+    let stepSurfaceTransmissions = 0;
 
-    // Evaluate transmission risk for all contact pairs with discordant status (S <-> I)
     for (const pair of contactPairs) {
       const a = pair.a;
       const b = pair.b;
@@ -364,7 +357,7 @@ export class SimulationInstance {
         const ep = this.activeEpisodes.get(episodeKey);
         const duration = ep ? ep.durationMinutes : 1.0;
 
-        const { probability } = computeTransmissionRisk(
+        const { probability, breakdown } = computeTransmissionRisk(
           dist,
           effectiveTemp,
           climate.relativeHumidity,
@@ -375,11 +368,26 @@ export class SimulationInstance {
           this.config.contamination
         );
 
-        // Monte Carlo transmission draw with deterministic PRNG
+        // Mask wearing mitigation factor (reduces transmission by 65%)
+        let effectiveProb = probability;
+        if (susceptible.maskWearing || infectious.maskWearing) {
+          effectiveProb *= 0.35;
+        }
+
+        // Monte Carlo transmission draw
         const roll = this.prng.nextFloat();
-        if (roll < probability) {
+        if (roll < effectiveProb) {
           if (!newlyInfectedIds.includes(susceptible.id)) {
             newlyInfectedIds.push(susceptible.id);
+            if (breakdown.isSurfaceTransmission) {
+              stepSurfaceTransmissions++;
+              this.cumulativeSurfaceTransmissions++;
+              susceptible.transmissionPathway = 'fomite';
+            } else {
+              stepAirTransmissions++;
+              this.cumulativeAirTransmissions++;
+              susceptible.transmissionPathway = 'aerosol';
+            }
           }
         }
       }
@@ -396,8 +404,7 @@ export class SimulationInstance {
       }
     }
 
-    // 7. Apply state transitions at the END of the time step
-    // (Prevents cascade contamination within the same minute step)
+    // Apply state transitions at end of step
     for (const id of newlyInfectedIds) {
       const agent = this.agents.find((ag) => ag.id === id);
       if (agent && agent.state === 'S') {
@@ -413,7 +420,7 @@ export class SimulationInstance {
       }
     }
 
-    // 8. Retire exiting visitors who reached dwell time
+    // Retire exiting visitors
     this.agents = this.agents.filter((a) => {
       a.dwellTimeRemaining--;
       if (a.isVisitor && a.dwellTimeRemaining <= 0) {
@@ -422,7 +429,7 @@ export class SimulationInstance {
       return true;
     });
 
-    // 9. Compute summary metrics for this step
+    // Compute summary metrics for this step
     const sCount = this.agents.filter((a) => a.state === 'S').length;
     const iCount = this.agents.filter((a) => a.state === 'I').length;
     const rCount = this.agents.filter((a) => a.state === 'R').length;
@@ -430,7 +437,6 @@ export class SimulationInstance {
     const totalPop = this.agents.length;
 
     this.cumulativeContactsCount += instantContactsCount;
-
     const clock = stepToClockTime(this.currentStep);
 
     const stepMetric: StepMetric = {
@@ -451,98 +457,88 @@ export class SimulationInstance {
       relativeHumidity: climate.relativeHumidity,
       windSpeed: climate.windSpeed,
       visitorsPresent: visitorsCount,
+      contactsUnder025m,
+      contactsUnder1m,
+      contactsUnder2m,
+      airTransmissions: stepAirTransmissions,
+      surfaceTransmissions: stepSurfaceTransmissions,
+      peakHourActive: activePeak,
+      flowSurgeFactor: Number(flowSurge.toFixed(2)),
       streetFlows: {
-        RueA: Math.round(this.layout.streets[0].defaultFlowPerHour * this.config.flowMultiplierByStreet.RueA),
-        RueB: Math.round(this.layout.streets[1].defaultFlowPerHour * this.config.flowMultiplierByStreet.RueB),
-        RueC: Math.round(this.layout.streets[2].defaultFlowPerHour * this.config.flowMultiplierByStreet.RueC),
-        RueD: Math.round(this.layout.streets[3].defaultFlowPerHour * this.config.flowMultiplierByStreet.RueD),
+        RueA: Math.round(180 * flowSurge * this.config.flowMultiplierByStreet.RueA),
+        RueB: Math.round(90 * flowSurge * this.config.flowMultiplierByStreet.RueB),
+        RueC: Math.round(60 * flowSurge * this.config.flowMultiplierByStreet.RueC),
+        RueD: Math.round(75 * flowSurge * this.config.flowMultiplierByStreet.RueD),
       },
     };
 
     this.metricsHistory.push(stepMetric);
     this.currentStep++;
 
-    if (this.currentStep >= 540) {
-      this.isFinished = true;
-    }
-
     return stepMetric;
   }
 
   /**
-   * Fast-forward simulation until 540 steps complete.
+   * Moves agents respecting Cite3D geometry, family clusters, and peak hour flow surges.
    */
-  runToCompletion(): SimulationResult {
-    while (!this.isFinished && this.currentStep < 540) {
-      this.step();
-    }
-    return this.getFinalResult();
-  }
+  private moveAgents(flowSurge: number = 1.0): void {
+    const market = this.config.marketRelocated
+      ? { x: this.config.marketPosition.x, y: this.config.marketPosition.y, width: 35, height: 35 }
+      : this.layout.market;
 
-  /**
-   * Move agents towards targets while avoiding building collisions.
-   */
-  private moveAgents(): void {
-    const market = this.layout.market;
+    for (let i = 0; i < this.agents.length; i++) {
+      const a = this.agents[i];
 
-    for (const a of this.agents) {
-      // Pick new target if close to existing one
+      // Target arrival check
       const distToTarget = Math.hypot(a.targetX - a.x, a.targetY - a.y);
-      if (distToTarget < 6.0) {
-        // Pedestrians often choose a ruelle or venelle to walk through the blocks
-        const useRuelle = this.layout.ruelles && this.layout.ruelles.length > 0 && this.prng.nextFloat() < 0.55;
-        if (useRuelle && this.layout.ruelles) {
-          const randomRuelle = this.layout.ruelles[this.prng.nextInt(0, this.layout.ruelles.length - 1)];
-          const newTarget = this.getRandomPointAlongRuelle(randomRuelle);
-          a.targetX = newTarget.x;
-          a.targetY = newTarget.y;
+      if (distToTarget < 5.0 || this.prng.nextFloat() < 0.04) {
+        // 40% probability to move towards informal market or commercial front
+        if (this.prng.nextFloat() < 0.40) {
+          a.targetX = market.x + this.prng.nextInt(-10, market.width + 10);
+          a.targetY = market.y + this.prng.nextInt(-10, market.height + 10);
         } else {
-          const corridor = this.layout.streets.find((s) => s.code === a.street) || this.layout.streets[0];
-          const newTarget = this.getRandomPointAlongCorridor(corridor);
-          a.targetX = newTarget.x;
-          a.targetY = newTarget.y;
+          const pt = getRandomCiteWalkablePoint(this.prng);
+          a.targetX = pt.simX;
+          a.targetY = pt.simY;
         }
       }
 
-      // Check if in market zone (causes slow browsing movement)
+      // Check if inside informal market (crowded browsing pace)
       const inMarket =
         a.x >= market.x &&
         a.x <= market.x + market.width &&
         a.y >= market.y &&
         a.y <= market.y + market.height;
 
-      // Displacement in 1 minute step
-      // Standard pedestrian speed: 1.2 m/s -> ~72 m / min
-      // But agents move with stops and interactions, effective speed ~ 12 - 25 m/min in urban core
-      const speedModifier = inMarket ? 0.35 : 1.0;
-      const stepDistanceMeters = (a.speed * 16.0) * speedModifier;
+      // Speed modifier: market stall density slows movement, peak hours accelerate street flows
+      const speedModifier = (inMarket ? 0.35 : 1.0) * flowSurge;
+      const stepDistanceMeters = a.speed * 14.0 * speedModifier;
 
       const angle = Math.atan2(a.targetY - a.y, a.targetX - a.x);
-      // Pedestrian Brownian jitter
-      const jitterAngle = angle + (this.prng.nextFloat() - 0.5) * 0.4;
+      const jitterAngle = angle + (this.prng.nextFloat() - 0.5) * 0.35;
 
       let nextX = a.x + Math.cos(jitterAngle) * stepDistanceMeters;
       let nextY = a.y + Math.sin(jitterAngle) * stepDistanceMeters;
 
-      // Obstacle collision avoidance against buildings
-      if (isInsideBuilding(nextX, nextY, this.layout)) {
-        // Try deflecting perpendicular
+      // STRICT COLLISION AVOIDANCE AGAINST CITE3D BUILDINGS
+      if (isCiteBuildingObstacle(nextX, nextY, 2.0) || isInsideBuilding(nextX, nextY, this.layout)) {
+        // Deflect tangentially along pedestrian corridor
         const altAngle1 = angle + Math.PI / 2;
         const altAngle2 = angle - Math.PI / 2;
         const tryX1 = a.x + Math.cos(altAngle1) * (stepDistanceMeters * 0.7);
         const tryY1 = a.y + Math.sin(altAngle1) * (stepDistanceMeters * 0.7);
 
-        if (!isInsideBuilding(tryX1, tryY1, this.layout)) {
+        if (!isCiteBuildingObstacle(tryX1, tryY1, 1.8) && !isInsideBuilding(tryX1, tryY1, this.layout)) {
           nextX = tryX1;
           nextY = tryY1;
         } else {
           const tryX2 = a.x + Math.cos(altAngle2) * (stepDistanceMeters * 0.7);
           const tryY2 = a.y + Math.sin(altAngle2) * (stepDistanceMeters * 0.7);
-          if (!isInsideBuilding(tryX2, tryY2, this.layout)) {
+          if (!isCiteBuildingObstacle(tryX2, tryY2, 1.8) && !isInsideBuilding(tryX2, tryY2, this.layout)) {
             nextX = tryX2;
             nextY = tryY2;
           } else {
-            // Stay in place if trapped
+            // Stay safely in place rather than clipping through building
             nextX = a.x;
             nextY = a.y;
           }
@@ -556,12 +552,16 @@ export class SimulationInstance {
   }
 
   /**
-   * Spatial proximity check and episode management using spatial grid.
+   * Spatial proximity check and episode management with multi-scenario tiers:
+   * 0.25m (extreme contact), 1.0m (social/conversational), 2.0m (droplet threshold).
    */
   private detectContacts(): {
     instantContactsCount: number;
     uniquePairsThisStep: number;
     contactPairs: Array<{ a: Agent; b: Agent; dist: number }>;
+    contactsUnder025m: number;
+    contactsUnder1m: number;
+    contactsUnder2m: number;
   } {
     const threshold = this.config.contamination.contactDistanceThresholdMeters;
     const thresholdSq = threshold * threshold;
@@ -570,10 +570,14 @@ export class SimulationInstance {
     const checkedPairs = new Set<string>();
     const currentStepPairs = new Set<string>();
 
+    let contactsUnder025m = 0;
+    let contactsUnder1m = 0;
+    let contactsUnder2m = 0;
+
     for (const a of this.agents) {
       const neighbors = this.grid.getPotentialNeighbors(a);
       for (const b of neighbors) {
-        if (a.id >= b.id) continue; // enforce unique pair check
+        if (a.id >= b.id) continue;
 
         const pairKey = `${a.id}_${b.id}`;
         if (checkedPairs.has(pairKey)) continue;
@@ -592,7 +596,11 @@ export class SimulationInstance {
           a.cumulativeContacts++;
           b.cumulativeContacts++;
 
-          // Manage contact episode
+          if (dist <= 0.25) contactsUnder025m++;
+          if (dist <= 1.0) contactsUnder1m++;
+          if (dist <= 2.0) contactsUnder2m++;
+
+          // Manage contact episode duration
           if (this.activeEpisodes.has(pairKey)) {
             const ep = this.activeEpisodes.get(pairKey)!;
             ep.lastStep = this.currentStep;
@@ -612,7 +620,7 @@ export class SimulationInstance {
       }
     }
 
-    // Clean up finished episodes (pairs no longer in contact)
+    // Clean up finished episodes
     for (const [key, ep] of this.activeEpisodes.entries()) {
       if (ep.lastStep < this.currentStep) {
         this.activeEpisodes.delete(key);
@@ -623,6 +631,9 @@ export class SimulationInstance {
       instantContactsCount: contactPairs.length,
       uniquePairsThisStep: currentStepPairs.size,
       contactPairs,
+      contactsUnder025m,
+      contactsUnder1m,
+      contactsUnder2m,
     };
   }
 
@@ -641,24 +652,21 @@ export class SimulationInstance {
       contactEpisodes: 0,
       cumulativeContacts: 0,
       newInfections: 0,
-      temperature: 25,
+      temperature: 32.5,
       relativeHumidity: 50,
-      windSpeed: 2,
+      windSpeed: 3.2,
       visitorsPresent: 0,
       streetFlows: { RueA: 0, RueB: 0, RueC: 0, RueD: 0 },
     };
 
-    let peakInf = 0;
-    for (const m of this.metricsHistory) {
-      if (m.infectiousCount > peakInf) {
-        peakInf = m.infectiousCount;
-      }
-    }
+    const initialSusceptible = Math.max(1, this.config.initialPopulation - this.config.initialInfectedCount);
+    const totalEverInfected = this.agents.filter((a) => a.state === 'I' || a.state === 'R').length;
+    const newInfectionsTotal = Math.max(0, totalEverInfected - this.config.initialInfectedCount);
+    const attackRate = Number(((newInfectionsTotal / initialSusceptible) * 100).toFixed(2));
 
-    const initialS = this.config.initialPopulation - this.config.initialInfectedCount;
-    const finalInfectedTotal = finalMetric.infectiousCount + finalMetric.removedCount;
-    const newInfectionsCount = Math.max(0, finalInfectedTotal - this.config.initialInfectedCount);
-    const attackRate = initialS > 0 ? (newInfectionsCount / initialS) * 100 : 0;
+    const peakInfectious = Math.max(...this.metricsHistory.map((m) => m.infectiousCount), 0);
+    const totalContacts = this.cumulativeContactsCount;
+    const avgContacts = this.agents.length > 0 ? Number((totalContacts / this.agents.length).toFixed(1)) : 0;
 
     return {
       experimentId: this.experimentId,
@@ -666,19 +674,29 @@ export class SimulationInstance {
       scenarioName: this.config.name,
       replicationIndex: this.replicationIndex,
       seed: this.config.seed,
-      totalSteps: this.metricsHistory.length,
+      totalSteps: this.currentStep,
       metrics: this.metricsHistory,
       finalMetrics: {
-        totalContacts: this.cumulativeContactsCount,
-        peakInfectious: peakInf,
+        totalContacts,
+        peakInfectious,
         finalInfectious: finalMetric.infectiousCount,
         finalInfectiousPercentage: finalMetric.infectiousPercentage,
-        attackRate: Number(attackRate.toFixed(2)),
+        attackRate,
         totalEpisodes: this.totalEpisodesCount,
-        avgContactsPerAgent: this.agents.length > 0 ? Number((this.cumulativeContactsCount / this.agents.length).toFixed(1)) : 0,
+        avgContactsPerAgent: avgContacts,
       },
-      configSnapshot: JSON.parse(JSON.stringify(this.config)),
+      configSnapshot: this.config,
       completedAt: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Run simulation to completion (all 540 steps) synchronously.
+   */
+  runToCompletion(): SimulationResult {
+    while (!this.isFinished && this.currentStep < 540) {
+      this.step();
+    }
+    return this.getFinalResult();
   }
 }

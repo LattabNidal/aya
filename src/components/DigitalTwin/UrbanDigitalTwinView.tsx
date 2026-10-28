@@ -1024,30 +1024,54 @@ export const UrbanDigitalTwinView: React.FC<UrbanDigitalTwinViewProps> = ({
                 ))}
               </div>
 
-              {/* Live Scientific Metric Counters */}
-              <div className="flex items-center gap-4 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 font-mono text-xs">
+              {/* Live Scientific Metric Counters (OCCSIM Standards) */}
+              <div className="flex items-center gap-3 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 font-mono text-xs flex-wrap">
                 <div>
-                  <span className="text-slate-400 text-[10px] block">Contacts instantanés:</span>
+                  <span className="text-slate-400 text-[10px] block">Taux d'Infection (Sick %):</span>
+                  <span className="text-rose-400 font-bold text-sm">
+                    {stepMetric ? `${stepMetric.infectiousPercentage.toFixed(1)}%` : '0.0%'}
+                  </span>
+                </div>
+                <div className="h-6 w-px bg-slate-800" />
+                <div>
+                  <span className="text-slate-400 text-[10px] block">Cycle Journalier (Heures de pointe):</span>
+                  {stepMetric?.peakHourActive ? (
+                    <span className="text-amber-300 font-bold bg-amber-950/80 border border-amber-700/60 px-1.5 py-0.5 rounded text-[11px] animate-pulse">
+                      🔥 {stepMetric.peakHourActive} (Flux x{stepMetric.flowSurgeFactor})
+                    </span>
+                  ) : (
+                    <span className="text-slate-300 font-medium text-[11px]">
+                      Flux nominal (09h - 18h)
+                    </span>
+                  )}
+                </div>
+                <div className="h-6 w-px bg-slate-800" />
+                <div>
+                  <span className="text-slate-400 text-[10px] block">Contacts &lt;2.0m / &lt;1.0m / &lt;0.25m:</span>
                   <span className="text-amber-400 font-bold">
-                    {stepMetric?.proximityContacts ?? 0}
+                    {stepMetric?.contactsUnder2m ?? stepMetric?.proximityContacts ?? 0}
+                    <span className="text-slate-500 font-normal"> / </span>
+                    <span className="text-orange-400">{stepMetric?.contactsUnder1m ?? 0}</span>
+                    <span className="text-slate-500 font-normal"> / </span>
+                    <span className="text-rose-500">{stepMetric?.contactsUnder025m ?? 0}</span>
                   </span>
                 </div>
+                <div className="h-6 w-px bg-slate-800" />
                 <div>
-                  <span className="text-slate-400 text-[10px] block">Cumul contacts:</span>
+                  <span className="text-slate-400 text-[10px] block">Vecteurs (Aérosol / Fomite):</span>
                   <span className="text-slate-200 font-bold">
-                    {stepMetric?.cumulativeContacts ?? 0}
+                    <span className="text-cyan-400">💨 {stepMetric?.airTransmissions ?? 0}</span>
+                    <span className="text-slate-600"> · </span>
+                    <span className="text-purple-400">🖐️ {stepMetric?.surfaceTransmissions ?? 0}</span>
                   </span>
                 </div>
+                <div className="h-6 w-px bg-slate-800" />
                 <div>
-                  <span className="text-slate-400 text-[10px] block">Température:</span>
-                  <span className="text-cyan-400 font-bold">
-                    {stepMetric?.temperature.toFixed(1) ?? '28.5'}°C
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-400 text-[10px] block">Humidité / Vent:</span>
+                  <span className="text-slate-400 text-[10px] block">ENVI-met (T° / RH / Vent):</span>
                   <span className="text-emerald-400 font-bold">
-                    {stepMetric ? `${stepMetric.relativeHumidity.toFixed(0)}% · ${stepMetric.windSpeed.toFixed(1)}m/s` : '45% · 2.1m/s'}
+                    {stepMetric
+                      ? `${stepMetric.temperature.toFixed(1)}°C · ${stepMetric.relativeHumidity.toFixed(0)}% · ${stepMetric.windSpeed.toFixed(2)} m/s`
+                      : '32.5°C · 50% · 3.20 m/s'}
                   </span>
                 </div>
               </div>

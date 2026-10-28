@@ -180,6 +180,8 @@ export interface ScenarioConfig {
   seed: number;
 }
 
+export type DemographicGroup = 'elderly' | 'adult' | 'child';
+
 export interface Agent {
   id: number;
   x: number;
@@ -195,6 +197,10 @@ export interface Agent {
   entryStep: number;
   dwellTimeRemaining: number;
   activeEpisodesWith: Set<number>;
+  demographic?: DemographicGroup;
+  familyId?: number;
+  maskWearing?: boolean;
+  transmissionPathway?: 'aerosol' | 'fomite';
 }
 
 export interface StepMetric {
@@ -215,6 +221,13 @@ export interface StepMetric {
   relativeHumidity: number;
   windSpeed: number;
   visitorsPresent: number;
+  contactsUnder025m?: number;
+  contactsUnder1m?: number;
+  contactsUnder2m?: number;
+  airTransmissions?: number;
+  surfaceTransmissions?: number;
+  peakHourActive?: '09:00 (Matin)' | '13:00 (Midi)' | '18:00 (Soir)' | null;
+  flowSurgeFactor?: number;
   streetFlows: {
     RueA: number;
     RueB: number;

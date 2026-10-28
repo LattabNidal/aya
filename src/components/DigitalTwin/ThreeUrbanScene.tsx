@@ -587,17 +587,63 @@ export const ThreeUrbanScene = forwardRef<ThreeUrbanSceneRef, ThreeUrbanScenePro
           return;
         }
 
-        // Object selection raycast
-        const intersects = raycaster.intersectObjects(clickablesRef.current, false);
+        // Object & Agent selection raycast
+        const selectableTargets = instancedAgentsRef.current
+          ? [...clickablesRef.current, instancedAgentsRef.current]
+          : clickablesRef.current;
+        const intersects = raycaster.intersectObjects(selectableTargets, false);
         if (intersects.length > 0) {
-          const hit = intersects[0].object;
-          const uData = hit.userData;
+          const hit = intersects[0];
+          // Check if agent instanced mesh was hit
+          if (hit.object === instancedAgentsRef.current && hit.instanceId !== undefined) {
+            const agentIdx = hit.instanceId;
+            const ag = propsRef.current.agents[agentIdx];
+            if (ag && propsRef.current.onSelectObject) {
+              const demLabel =
+                ag.demographic === 'elderly'
+                  ? 'Personne Âgée (Vulnérable)'
+                  : ag.demographic === 'child'
+                  ? 'Enfant (Élève / Jeune)'
+                  : 'Adulte / Jeune Parent';
+              propsRef.current.onSelectObject({
+                type: 'agent',
+                id: `agent_${ag.id}`,
+                name: `Piéton 3D #${ag.id} — ${demLabel}`,
+                details: {
+                  'Groupe Démographique': demLabel,
+                  'Cellule Familiale': `Famille #${ag.familyId || 1} (Foyer intergénérationnel)`,
+                  'Statut Sanitaire':
+                    ag.state === 'I'
+                      ? 'Infecté (Contagieux)'
+                      : ag.state === 'R'
+                      ? 'Rétabli (Immunisé)'
+                      : 'Sain (Susceptible)',
+                  'Port du Masque': ag.maskWearing ? 'Oui (Atténuation 65%)' : 'Non',
+                  'Vitesse': `${ag.speed.toFixed(2)} m/s`,
+                  'Contacts Rapprochés (<2m)': ag.cumulativeContacts,
+                  'Vecteur Contamination':
+                    ag.transmissionPathway === 'fomite'
+                      ? 'Surfaces / Étal de marché'
+                      : ag.transmissionPathway === 'aerosol'
+                      ? 'Aérosol (Microclimat ENVI-met)'
+                      : 'Sain / Non infecté',
+                  'Coordonnées UV9': `X: ${ag.x.toFixed(1)}m, Y: ${ag.y.toFixed(1)}m`,
+                },
+                position: { x: ag.x, y: ag.y, z: 1.7 },
+              });
+              return;
+            }
+          }
+
+          // Otherwise building hit
+          const bldHit = hit.object;
+          const uData = bldHit.userData;
           if (uData && propsRef.current.onSelectObject) {
-            const simCoords = threeToSim(hit.position.x, hit.position.z);
+            const simCoords = threeToSim(bldHit.position.x, bldHit.position.z);
             propsRef.current.onSelectObject({
               type: 'building',
               id: uData.id || 'bld',
-              name: uData.name || hit.name || 'Bâtiment',
+              name: uData.name || bldHit.name || 'Bâtiment',
               details: {
                 'Niveaux / Étages': `R+${uData.floors || 4}`,
                 Hauteur: `${((uData.floors || 4) * 3.2).toFixed(1)} m`,

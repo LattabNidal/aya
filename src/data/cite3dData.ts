@@ -237,5 +237,121 @@ export const CITE_LABELS: CiteLabelDef[] = [
   { text: 'École Bousherit', px: 160, py: 265, y3d: 3.4 },
   { text: 'Mosquée', px: 625, py: 420, y3d: 4.6 },
   { text: 'CEM Amar', px: 690, py: 448, y3d: 3.2 },
-  { text: 'Base de vie chinoise', px: 465, py: 60, y3d: 1.5 }
+  { text: 'Base de vie chinoise', px: 465, py: 60, y3d: 1.5 },
 ];
+
+/**
+ * Check if a simulation point (simX, simY) collides with any of the 47 Cite3D buildings.
+ */
+export function isCiteBuildingObstacle(simX: number, simY: number, bufferMeters: number = 2.0): boolean {
+  const { px, py } = simToPx(simX, simY);
+  // In Cite3D, 1px is approx 0.76m. Buffer in pixels:
+  const bufferPx = bufferMeters / 0.76;
+  return nearBuilding(px, py, bufferPx);
+}
+
+/**
+ * Key gathering attractors in Cite3D plan
+ */
+export const CITE_ATTRACTORS = [
+  { name: 'Marché Informel & Front Commercial', px: 525, py: 420, weight: 0.35 },
+  { name: 'École Bousherit & Parvis', px: 160, py: 265, weight: 0.22 },
+  { name: 'Grande Mosquée Esplanade', px: 625, py: 420, weight: 0.20 },
+  { name: 'Cœur Central Îlot 3 Ruelles', px: 395, py: 360, weight: 0.15 },
+  { name: 'Jardin & Promenades', px: 445, py: 470, weight: 0.08 },
+];
+
+/**
+ * Get a valid walkable point along lanes or open island spaces avoiding all buildings.
+ */
+export function getRandomCiteWalkablePoint(prng: {
+  nextFloat: () => number;
+  nextInt: (min: number, max: number) => number;
+}): { simX: number; simY: number } {
+  let attempts = 0;
+  while (attempts < 50) {
+    attempts++;
+    // 65% chance along one of the 7 pedestrian lanes
+    if (prng.nextFloat() < 0.65) {
+      const laneIdx = prng.nextInt(0, CITE_LANES.length - 1);
+      const [pts, w] = CITE_LANES[laneIdx];
+      const segIdx = prng.nextInt(0, pts.length - 2);
+      const p1 = pts[segIdx];
+      const p2 = pts[segIdx + 1];
+      const t = prng.nextFloat();
+      const bx = p1[0] + t * (p2[0] - p1[0]);
+      const by = p1[1] + t * (p2[1] - p1[1]);
+      // lateral offset
+      const dx = p2[0] - p1[0];
+      const dy = p2[1] - p1[1];
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const lat = (prng.nextFloat() - 0.5) * (w * 0.7);
+      const px = bx + nx * lat;
+      const py = by + ny * lat;
+      if (!nearBuilding(px, py, 2)) {
+        return pxToSim(px, py);
+      }
+    } else {
+      // Pick within island polygon outside building
+      const islandIdx = prng.nextInt(0, CITE_ISLANDS.length - 1);
+      const poly = CITE_ISLANDS[islandIdx];
+      // Bounding box of island
+      let minX = 999, maxX = -999, minY = 999, maxY = -999;
+      for (const [ix, iy] of poly) {
+        if (ix < minX) minX = ix;
+        if (ix > maxX) maxX = ix;
+        if (iy < minY) minY = iy;
+        if (iy > maxY) maxY = iy;
+      }
+      const testPx = minX + prng.nextFloat() * (maxX - minX);
+      const testPy = minY + prng.nextFloat() * (maxY - minY);
+      if (inPoly(poly, testPx, testPy) && !nearBuilding(testPx, testPy, 3)) {
+        return pxToSim(testPx, testPy);
+      }
+    }
+  }
+  // Default safe courtyard coordinate in Îlot 3
+  return pxToSim(262, 340);
+}
+
+/**
+ * Daily Cycles: Pedestrian flow surge at three peak hours: 9:00 AM, 1:00 PM, and 6:00 PM.
+ * Step 0 = 09:00, Step 240 = 13:00, Step 540 = 18:00
+ */
+export function getDailyPeakHourSurge(step: number): {
+  flowSurge: number;
+  activePeak: '09:00 (Matin)' | '13:00 (Midi)' | '18:00 (Soir)' | null;
+} {
+  // Peak 1: 09:00 AM (step 0 to 45) -> Morning school dropoff & market opening
+  if (step <= 45) {
+    const intensity = 1.0 - step / 45;
+    return {
+      flowSurge: 1.0 + 0.85 * intensity,
+      activePeak: '09:00 (Matin)',
+    };
+  }
+  // Peak 2: 13:00 (1:00 PM, step 210 to 270) -> Midday prayer, lunch, informal market peak
+  if (step >= 210 && step <= 270) {
+    const distFromPeak = Math.abs(step - 240);
+    const intensity = Math.max(0, 1.0 - distFromPeak / 30);
+    return {
+      flowSurge: 1.0 + 1.15 * intensity,
+      activePeak: '13:00 (Midi)',
+    };
+  }
+  // Peak 3: 18:00 (6:00 PM, step 495 to 540) -> Evening family gatherings & collective outdoor socialization
+  if (step >= 495) {
+    const intensity = (step - 495) / 45;
+    return {
+      flowSurge: 1.0 + 0.95 * intensity,
+      activePeak: '18:00 (Soir)',
+    };
+  }
+  return {
+    flowSurge: 1.0,
+    activePeak: null,
+  };
+}
+

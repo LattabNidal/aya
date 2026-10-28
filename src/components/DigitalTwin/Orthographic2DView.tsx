@@ -401,11 +401,49 @@ export const Orthographic2DView: React.FC<Orthographic2DViewProps> = ({
                   key={`agent_${a.id}`}
                   cx={pt.px}
                   cy={pt.py}
-                  r="2.8"
+                  r="3.2"
                   fill={color}
                   stroke="#ffffff"
-                  strokeWidth="0.6"
+                  strokeWidth="0.8"
                   filter="url(#shadowFilter)"
+                  className="cursor-pointer hover:r-4 transition-all"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onSelectObject) {
+                      const demLabel =
+                        a.demographic === 'elderly'
+                          ? 'Personne Âgée (Vulnérable)'
+                          : a.demographic === 'child'
+                          ? 'Enfant (Élève / Jeune)'
+                          : 'Adulte / Jeune Parent';
+                      onSelectObject({
+                        type: 'agent',
+                        id: `agent_${a.id}`,
+                        name: `Agent #${a.id} — ${demLabel}`,
+                        details: {
+                          'Groupe Démographique': demLabel,
+                          'Cellule Familiale': `Famille #${a.familyId || 1} (Foyer intergénérationnel)`,
+                          'Statut Sanitaire':
+                            a.state === 'I'
+                              ? 'Infecté (Contagieux)'
+                              : a.state === 'R'
+                              ? 'Rétabli (Immunisé)'
+                              : 'Sain (Susceptible)',
+                          'Port du Masque': a.maskWearing ? 'Oui (Atténuation 65%)' : 'Non',
+                          'Vitesse Réelle': `${a.speed.toFixed(2)} m/s`,
+                          'Contacts Cumulés (<2m)': a.cumulativeContacts,
+                          'Vecteur Transmission':
+                            a.transmissionPathway === 'fomite'
+                              ? 'Surfaces / Fomite (Étal de marché)'
+                              : a.transmissionPathway === 'aerosol'
+                              ? 'Aérosol (Microclimat ENVI-met)'
+                              : 'Sain / Non infecté',
+                          'Coordonnées UV9': `X: ${a.x.toFixed(1)}m, Y: ${a.y.toFixed(1)}m`,
+                        },
+                        position: { x: a.x, y: a.y, z: 1.7 },
+                      });
+                    }
+                  }}
                 />
               );
             })}
