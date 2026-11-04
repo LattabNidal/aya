@@ -184,13 +184,22 @@ export const CITE_BUILDINGS: CiteBuildingDef[] = CITE_BUILDINGS_RAW.map((b, i) =
 });
 
 export function nearBuilding(px: number, py: number, m: number): boolean {
-  return CITE_BUILDINGS_RAW.some(([cx, cy, w, d, a]) => {
+  for (let i = 0; i < CITE_BUILDINGS_RAW.length; i++) {
+    const [cx, cy, w, d, a] = CITE_BUILDINGS_RAW[i];
     const dx = px - cx;
     const dy = py - cy;
+    // Fast axis-aligned bounding box pre-filter before trigonometry
+    const maxHalfDim = (w > d ? w : d) * 0.72 + m;
+    if (Math.abs(dx) > maxHalfDim || Math.abs(dy) > maxHalfDim) {
+      continue;
+    }
     const c = Math.cos(rad(a));
     const s = Math.sin(rad(a));
-    return Math.abs(dx * c + dy * s) < w / 2 + m && Math.abs(-dx * s + dy * c) < d / 2 + m;
-  });
+    if (Math.abs(dx * c + dy * s) < w / 2 + m && Math.abs(-dx * s + dy * c) < d / 2 + m) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Jardins : [cx, cy, largeur, profondeur]

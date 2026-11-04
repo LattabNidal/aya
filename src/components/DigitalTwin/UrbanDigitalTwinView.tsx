@@ -40,6 +40,8 @@ import {
 import { Agent, ScenarioConfig, ScenarioId, SpatialLayout, StepMetric } from '../../types/simulation';
 import { Orthographic2DView } from './Orthographic2DView';
 import { SelectedObjectInfo, ThreeUrbanScene, ThreeUrbanSceneRef } from './ThreeUrbanScene';
+import { PopulationConfigPanel } from '../PopulationConfigPanel';
+import { SimulationEvolutionCharts } from '../Charts/SimulationEvolutionCharts';
 
 interface UrbanDigitalTwinViewProps {
   layout: SpatialLayout;
@@ -58,6 +60,8 @@ interface UrbanDigitalTwinViewProps {
   onUpdateSpatialLayout?: (newLayout: SpatialLayout) => void;
   onNavigateTab?: (tab: any) => void;
   onOpenDetailedReport?: () => void;
+  onUpdatePopulationParams?: (totalPop: number, initialInfected: number) => void;
+  metricsHistory?: StepMetric[];
 }
 
 export const UrbanDigitalTwinView: React.FC<UrbanDigitalTwinViewProps> = ({
@@ -77,6 +81,8 @@ export const UrbanDigitalTwinView: React.FC<UrbanDigitalTwinViewProps> = ({
   onUpdateSpatialLayout,
   onNavigateTab,
   onOpenDetailedReport,
+  onUpdatePopulationParams,
+  metricsHistory = [],
 }) => {
   // View mode: '2d' | '3d' | 'split'
   const [viewMode, setViewMode] = useState<'2d' | '3d' | 'split'>('split');
@@ -112,6 +118,8 @@ export const UrbanDigitalTwinView: React.FC<UrbanDigitalTwinViewProps> = ({
   const [objPosZ, setObjPosZ] = useState<number>(0);
   const [objPosY, setObjPosY] = useState<number>(0);
   const [showObjModel, setShowObjModel] = useState<boolean>(false);
+  const [showPopModal, setShowPopModal] = useState<boolean>(false);
+  const [showChartsModal, setShowChartsModal] = useState<boolean>(false);
 
   const threeRef = useRef<ThreeUrbanSceneRef>(null);
 
@@ -371,6 +379,75 @@ export const UrbanDigitalTwinView: React.FC<UrbanDigitalTwinViewProps> = ({
                 </button>
               ))}
             </div>
+          </div>
+        </div>
+
+        {/* Real-time Synchronized Population & Infection Counters */}
+        <div className="mt-3 pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Compteur 1 : Population Totale */}
+            <div className="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-lg border border-emerald-600/40 shadow-xs">
+              <Users className="w-4 h-4 text-emerald-400" />
+              <div>
+                <span className="text-[10px] text-slate-400 block font-semibold uppercase">Population Totale:</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold text-white font-mono">{agents.length}</span>
+                  <span className="text-[11px] text-emerald-400 font-medium">({countS} sains)</span>
+                  <span className="text-[11px] text-amber-400 font-medium">({countR} rétablis)</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Compteur 2 : Personnes Infectées */}
+            <div className="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-lg border border-rose-600/40 shadow-xs">
+              <Flame className="w-4 h-4 text-rose-400" />
+              <div>
+                <span className="text-[10px] text-slate-400 block font-semibold uppercase">Personnes Infectées:</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold text-rose-400 font-mono">{countI}</span>
+                  <span className="text-[11px] text-rose-300 font-medium">
+                    ({agents.length > 0 ? ((countI / agents.length) * 100).toFixed(1) : 0}%)
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Config Button */}
+            {onUpdatePopulationParams && (
+              <button
+                onClick={() => setShowPopModal(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-600/60 text-emerald-300 font-bold rounded-lg transition text-xs shadow-xs"
+                title="Modifier le nombre total de personnes et le nombre d'infectés initiaux"
+              >
+                <Sliders className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Régler Population ({config.initialPopulation} hab., {config.initialInfectedCount} inf.)</span>
+              </button>
+            )}
+
+            {/* Evolution Charts Button */}
+            <button
+              onClick={() => setShowChartsModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-600/60 text-indigo-300 font-bold rounded-lg transition text-xs shadow-xs"
+              title="Afficher les 2 graphiques synchronisés : Graphique 1 (Population) et Graphique 2 (Infections)"
+            >
+              <Activity className="w-3.5 h-3.5 text-indigo-400" />
+              <span>📈 2 Graphiques Évolution</span>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-3 text-xs font-mono text-slate-400">
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" />
+              <span className="text-slate-300">Vert: Sain</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block" />
+              <span className="text-slate-300">Rouge: Infecté</span>
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" />
+              <span className="text-slate-300">Jaune: Exposé/Rétabli</span>
+            </span>
           </div>
         </div>
 
@@ -722,16 +799,16 @@ export const UrbanDigitalTwinView: React.FC<UrbanDigitalTwinViewProps> = ({
               </div>
               <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[11px]">
                 <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-sky-400" />
-                  <span className="text-slate-300">Sain (S): {countS}</span>
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                  <span className="text-slate-300">Sain (Vert): {countS}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-rose-500" />
-                  <span className="text-slate-300">Infecté (I): {countI}</span>
+                  <span className="text-slate-300">Infecté (Rouge): {countI}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-purple-400" />
-                  <span className="text-slate-300">Rétabli (R): {countR}</span>
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                  <span className="text-slate-300">Rétabli/Exposé (Jaune): {countR}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-xs bg-emerald-600" />
@@ -1420,6 +1497,62 @@ export const UrbanDigitalTwinView: React.FC<UrbanDigitalTwinViewProps> = ({
                 Fermer
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Population & Infection Configuration Modal */}
+      {showPopModal && onUpdatePopulationParams && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 max-w-2xl w-full shadow-2xl relative">
+            <button
+              onClick={() => setShowPopModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white text-lg font-bold"
+            >
+              ✕
+            </button>
+            <PopulationConfigPanel
+              currentTotalPopulation={config.initialPopulation}
+              currentInitialInfected={config.initialInfectedCount}
+              isSimulating={isSimulating}
+              currentStep={currentStep}
+              onApply={(tot, inf) => {
+                onUpdatePopulationParams(tot, inf);
+                setShowPopModal(false);
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Synchronized Evolution Charts Modal (Graphique 1 & Graphique 2) */}
+      {showChartsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 max-w-4xl w-full shadow-2xl relative my-8">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Activity className="w-5 h-5 text-emerald-400" />
+                  <span>Graphiques d'Évolution Synchronisés en Temps Réel</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Dynamique de la population (Sains vs Infectés) et cinétique d'infections (09:00 à 18:00)
+                </p>
+              </div>
+              <button
+                onClick={() => setShowChartsModal(false)}
+                className="text-slate-400 hover:text-white px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs font-bold transition"
+              >
+                ✕ Fermer
+              </button>
+            </div>
+
+            <SimulationEvolutionCharts
+              metrics={metricsHistory}
+              currentStep={currentStep}
+              initialPopulation={config.initialPopulation}
+              initialInfectedCount={config.initialInfectedCount}
+            />
           </div>
         </div>
       )}

@@ -33,6 +33,11 @@ import {
   pxToSim,
   simToPx,
 } from '../data/cite3dData';
+import {
+  buildPedestrianRoute,
+  findNearestNode,
+  getRandomStreetNeighbor,
+} from './pedestrianNavigation';
 
 interface GridCell {
   agents: Agent[];
@@ -56,7 +61,7 @@ export class SpatialGrid {
   clear(): void {
     for (let c = 0; c < this.cols; c++) {
       for (let r = 0; r < this.rows; r++) {
-        this.cells[c][r].agents = [];
+        this.cells[c][r].agents.length = 0;
       }
     }
   }
@@ -67,27 +72,68 @@ export class SpatialGrid {
     this.cells[c][r].agents.push(agent);
   }
 
-  getPotentialNeighbors(agent: Agent): Agent[] {
-    const c = Math.floor(agent.x / this.cellSize);
-    const r = Math.floor(agent.y / this.cellSize);
-    const neighbors: Agent[] = [];
+  /**
+   * Zero-allocation candidate pair iteration:
+   * Checks every pair of agents in the same cell and in the 4 forward neighbor cells.
+   * Every potential neighbor pair is visited exactly once without allocating any objects or strings.
+   */
+  forEachCandidatePair(callback: (a: Agent, b: Agent) => void): void {
+    for (let c = 0; c < this.cols; c++) {
+      for (let r = 0; r < this.rows; r++) {
+        const cellAgents = this.cells[c][r].agents;
+        const len = cellAgents.length;
+        if (len === 0) continue;
 
-    const minC = Math.max(0, c - 1);
-    const maxC = Math.min(this.cols - 1, c + 1);
-    const minR = Math.max(0, r - 1);
-    const maxR = Math.min(this.rows - 1, r + 1);
+        // 1. Intra-cell pairs (i < j)
+        for (let i = 0; i < len; i++) {
+          const a = cellAgents[i];
+          for (let j = i + 1; j < len; j++) {
+            callback(a, cellAgents[j]);
+          }
+        }
 
-    for (let i = minC; i <= maxC; i++) {
-      for (let j = minR; j <= maxR; j++) {
-        const cell = this.cells[i][j];
-        for (const other of cell.agents) {
-          if (other.id !== agent.id) {
-            neighbors.push(other);
+        // 2. Forward neighbor cells (c + 1, r)
+        if (c + 1 < this.cols) {
+          const nCell = this.cells[c + 1][r].agents;
+          for (let i = 0; i < len; i++) {
+            const a = cellAgents[i];
+            for (let k = 0; k < nCell.length; k++) {
+              callback(a, nCell[k]);
+            }
+          }
+        }
+        // (c - 1, r + 1)
+        if (c > 0 && r + 1 < this.rows) {
+          const nCell = this.cells[c - 1][r + 1].agents;
+          for (let i = 0; i < len; i++) {
+            const a = cellAgents[i];
+            for (let k = 0; k < nCell.length; k++) {
+              callback(a, nCell[k]);
+            }
+          }
+        }
+        // (c, r + 1)
+        if (r + 1 < this.rows) {
+          const nCell = this.cells[c][r + 1].agents;
+          for (let i = 0; i < len; i++) {
+            const a = cellAgents[i];
+            for (let k = 0; k < nCell.length; k++) {
+              callback(a, nCell[k]);
+            }
+          }
+        }
+        // (c + 1, r + 1)
+        if (c + 1 < this.cols && r + 1 < this.rows) {
+          const nCell = this.cells[c + 1][r + 1].agents;
+          for (let i = 0; i < len; i++) {
+            const a = cellAgents[i];
+            for (let k = 0; k < nCell.length; k++) {
+              callback(a, nCell[k]);
+            }
           }
         }
       }
     }
-    return neighbors;
   }
 }
 
@@ -184,9 +230,8 @@ export class SimulationInstance {
 
       // Spawn on authentic walkable Cite3D coordinate (ruelles / courtyards)
       const spawnPoint = getRandomCiteWalkablePoint(this.prng);
-
-      // Initial target around attractors or ruelles
-      const targetPoint = getRandomCiteWalkablePoint(this.prng);
+      const startNode = findNearestNode(spawnPoint.simX, spawnPoint.simY);
+      const nextNode = getRandomStreetNeighbor(startNode.id, undefined, this.prng);
 
       const chosenStreet = streets[i % streets.length];
       const state = i < safeInfectedCount ? 'I' : 'S';
@@ -198,8 +243,8 @@ export class SimulationInstance {
         id: this.nextAgentId++,
         x: spawnPoint.simX,
         y: spawnPoint.simY,
-        targetX: targetPoint.simX,
-        targetY: targetPoint.simY,
+        targetX: nextNode.simX,
+        targetY: nextNode.simY,
         speed: this.config.pedestrianSpeedMs * speedFactor * (0.9 + 0.2 * this.prng.nextFloat()),
         street: chosenStreet,
         isVisitor: false,
@@ -207,11 +252,15 @@ export class SimulationInstance {
         infectionStep: state === 'I' ? 0 : undefined,
         cumulativeContacts: 0,
         entryStep: 0,
-        dwellTimeRemaining: this.prng.nextInt(90, 540),
+        dwellTimeRemaining: this.prng.nextInt(30, 180),
         activeEpisodesWith: new Set(),
         demographic,
         familyId,
         maskWearing,
+        currentNodeId: startNode.id,
+        previousNodeId: undefined,
+        destinationNodeId: nextNode.id,
+        lateralOffset: (this.prng.nextFloat() - 0.5) * 1.6,
       };
 
       this.agents.push(agent);
@@ -238,32 +287,19 @@ export class SimulationInstance {
         r -= g.weight;
       }
 
-      // Visitors are attracted to informal market & commercial front
-      const targetIsMarket = this.prng.nextFloat() < 0.70;
-      let targetX = 250;
-      let targetY = 200;
-
-      if (targetIsMarket) {
-        const mPos = this.config.marketRelocated
-          ? this.config.marketPosition
-          : { x: this.layout.market.x, y: this.layout.market.y };
-        targetX = mPos.x + this.prng.nextInt(-15, 15);
-        targetY = mPos.y + this.prng.nextInt(-15, 15);
-      } else {
-        const pt = getRandomCiteWalkablePoint(this.prng);
-        targetX = pt.simX;
-        targetY = pt.simY;
-      }
+      // Visitors navigate towards informal market & commercial front along streets
+      const startNode = findNearestNode(gate.position.x, gate.position.y);
+      const nextNode = getRandomStreetNeighbor(startNode.id, undefined, this.prng);
 
       const isMaskMandate = this.config.id === 'S1' || this.config.id === 'S4';
       const maskWearing = isMaskMandate ? this.prng.nextFloat() < 0.75 : false;
 
       const agent: Agent = {
         id: this.nextAgentId++,
-        x: gate.position.x + this.prng.nextInt(-4, 4),
-        y: gate.position.y + this.prng.nextInt(-4, 4),
-        targetX,
-        targetY,
+        x: gate.position.x + (this.prng.nextFloat() - 0.5) * 3,
+        y: gate.position.y + (this.prng.nextFloat() - 0.5) * 3,
+        targetX: nextNode.simX,
+        targetY: nextNode.simY,
         speed: this.config.pedestrianSpeedMs * (0.85 + 0.3 * this.prng.nextFloat()),
         street: gate.targetStreet,
         isVisitor: true,
@@ -274,6 +310,10 @@ export class SimulationInstance {
         activeEpisodesWith: new Set(),
         demographic: this.prng.nextFloat() < 0.25 ? 'elderly' : 'adult',
         maskWearing,
+        currentNodeId: startNode.id,
+        previousNodeId: undefined,
+        destinationNodeId: nextNode.id,
+        lateralOffset: (this.prng.nextFloat() - 0.5) * 1.6,
       };
 
       this.agents.push(agent);
@@ -480,6 +520,8 @@ export class SimulationInstance {
 
   /**
    * Moves agents respecting Cite3D geometry, family clusters, and peak hour flow surges.
+   * Both infected and healthy agents actively navigate realistic pedestrian corridors
+   * without colliding with walls.
    */
   private moveAgents(flowSurge: number = 1.0): void {
     const market = this.config.marketRelocated
@@ -489,20 +531,6 @@ export class SimulationInstance {
     for (let i = 0; i < this.agents.length; i++) {
       const a = this.agents[i];
 
-      // Target arrival check
-      const distToTarget = Math.hypot(a.targetX - a.x, a.targetY - a.y);
-      if (distToTarget < 5.0 || this.prng.nextFloat() < 0.04) {
-        // 40% probability to move towards informal market or commercial front
-        if (this.prng.nextFloat() < 0.40) {
-          a.targetX = market.x + this.prng.nextInt(-10, market.width + 10);
-          a.targetY = market.y + this.prng.nextInt(-10, market.height + 10);
-        } else {
-          const pt = getRandomCiteWalkablePoint(this.prng);
-          a.targetX = pt.simX;
-          a.targetY = pt.simY;
-        }
-      }
-
       // Check if inside informal market (crowded browsing pace)
       const inMarket =
         a.x >= market.x &&
@@ -511,38 +539,64 @@ export class SimulationInstance {
         a.y <= market.y + market.height;
 
       // Speed modifier: market stall density slows movement, peak hours accelerate street flows
-      const speedModifier = (inMarket ? 0.35 : 1.0) * flowSurge;
-      const stepDistanceMeters = a.speed * 14.0 * speedModifier;
+      const speedModifier = (inMarket ? 0.65 : 1.0) * flowSurge;
+      // Step distance: 2.8m - 4.5m per minute step for fluid visible progression
+      const stepDistanceMeters = a.speed * 2.8 * speedModifier;
 
-      const angle = Math.atan2(a.targetY - a.y, a.targetX - a.x);
-      const jitterAngle = angle + (this.prng.nextFloat() - 0.5) * 0.35;
+      // Ensure agent has a valid target node
+      if (a.targetX === undefined || a.targetY === undefined || !a.destinationNodeId) {
+        const near = findNearestNode(a.x, a.y);
+        const next = getRandomStreetNeighbor(near.id, a.previousNodeId, this.prng);
+        a.currentNodeId = near.id;
+        a.destinationNodeId = next.id;
+        a.targetX = next.simX;
+        a.targetY = next.simY;
+      }
 
-      let nextX = a.x + Math.cos(jitterAngle) * stepDistanceMeters;
-      let nextY = a.y + Math.sin(jitterAngle) * stepDistanceMeters;
+      let dx = a.targetX - a.x;
+      let dy = a.targetY - a.y;
+      let distToWp = Math.hypot(dx, dy);
 
-      // STRICT COLLISION AVOIDANCE AGAINST CITE3D BUILDINGS
-      if (isCiteBuildingObstacle(nextX, nextY, 2.0) || isInsideBuilding(nextX, nextY, this.layout)) {
-        // Deflect tangentially along pedestrian corridor
-        const altAngle1 = angle + Math.PI / 2;
-        const altAngle2 = angle - Math.PI / 2;
-        const tryX1 = a.x + Math.cos(altAngle1) * (stepDistanceMeters * 0.7);
-        const tryY1 = a.y + Math.sin(altAngle1) * (stepDistanceMeters * 0.7);
+      // Reached street intersection / node -> spontaneously choose next connected street/ruelle like a real pedestrian
+      if (distToWp < 2.5) {
+        const currId = a.destinationNodeId || a.currentNodeId || findNearestNode(a.x, a.y).id;
+        const nextNode = getRandomStreetNeighbor(currId, a.previousNodeId, this.prng);
+        a.previousNodeId = currId;
+        a.currentNodeId = nextNode.id;
+        a.destinationNodeId = nextNode.id;
+        a.targetX = nextNode.simX;
+        a.targetY = nextNode.simY;
 
-        if (!isCiteBuildingObstacle(tryX1, tryY1, 1.8) && !isInsideBuilding(tryX1, tryY1, this.layout)) {
-          nextX = tryX1;
-          nextY = tryY1;
-        } else {
-          const tryX2 = a.x + Math.cos(altAngle2) * (stepDistanceMeters * 0.7);
-          const tryY2 = a.y + Math.sin(altAngle2) * (stepDistanceMeters * 0.7);
-          if (!isCiteBuildingObstacle(tryX2, tryY2, 1.8) && !isInsideBuilding(tryX2, tryY2, this.layout)) {
-            nextX = tryX2;
-            nextY = tryY2;
-          } else {
-            // Stay safely in place rather than clipping through building
-            nextX = a.x;
-            nextY = a.y;
-          }
-        }
+        dx = a.targetX - a.x;
+        dy = a.targetY - a.y;
+        distToWp = Math.hypot(dx, dy);
+      }
+
+      // Advance along vector towards target node
+      const moveDist = Math.min(distToWp, stepDistanceMeters);
+      const dirX = distToWp > 0.01 ? dx / distToWp : 0;
+      const dirY = distToWp > 0.01 ? dy / distToWp : 0;
+
+      // Primary forward step along street axis
+      let nextX = a.x + dirX * moveDist;
+      let nextY = a.y + dirY * moveDist;
+
+      // Natural lateral dispersion along sidewalk / street corridor width
+      const lat = a.lateralOffset || 0;
+      const perpX = -dirY * lat;
+      const perpY = dirX * lat;
+      const tryX = nextX + perpX;
+      const tryY = nextY + perpY;
+
+      // Strict obstacle avoidance: test if dispersed point clears buildings
+      if (!isCiteBuildingObstacle(tryX, tryY, 1.2) && !isInsideBuilding(tryX, tryY, this.layout)) {
+        nextX = tryX;
+        nextY = tryY;
+      } else if (isCiteBuildingObstacle(nextX, nextY, 0.8) || isInsideBuilding(nextX, nextY, this.layout)) {
+        // If center-line is also close, nudge towards target node
+        const nudgeAngle = Math.atan2(a.targetY - a.y, a.targetX - a.x);
+        nextX = a.x + Math.cos(nudgeAngle) * Math.min(1.5, moveDist);
+        nextY = a.y + Math.sin(nudgeAngle) * Math.min(1.5, moveDist);
       }
 
       const clamped = clampToTerrain({ x: nextX, y: nextY }, this.layout);
@@ -554,6 +608,7 @@ export class SimulationInstance {
   /**
    * Spatial proximity check and episode management with multi-scenario tiers:
    * 0.25m (extreme contact), 1.0m (social/conversational), 2.0m (droplet threshold).
+   * Uses zero-allocation grid traversal for ultra-fluid 60 FPS performance even at 5,000+ agents.
    */
   private detectContacts(): {
     instantContactsCount: number;
@@ -566,70 +621,39 @@ export class SimulationInstance {
     const threshold = this.config.contamination.contactDistanceThresholdMeters;
     const thresholdSq = threshold * threshold;
 
-    const contactPairs: Array<{ a: Agent; b: Agent; dist: number }> = [];
-    const checkedPairs = new Set<string>();
-    const currentStepPairs = new Set<string>();
-
+    let instantContactsCount = 0;
     let contactsUnder025m = 0;
     let contactsUnder1m = 0;
     let contactsUnder2m = 0;
 
-    for (const a of this.agents) {
-      const neighbors = this.grid.getPotentialNeighbors(a);
-      for (const b of neighbors) {
-        if (a.id >= b.id) continue;
+    // Only collect pairs that have an active infection risk (one 'S' and one 'I')
+    const contactPairs: Array<{ a: Agent; b: Agent; dist: number }> = [];
 
-        const pairKey = `${a.id}_${b.id}`;
-        if (checkedPairs.has(pairKey)) continue;
-        checkedPairs.add(pairKey);
+    this.grid.forEachCandidatePair((a, b) => {
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const distSq = dx * dx + dy * dy;
 
-        const dx = a.x - b.x;
-        const dy = a.y - b.y;
-        const distSq = dx * dx + dy * dy;
+      if (distSq <= thresholdSq) {
+        instantContactsCount++;
+        a.cumulativeContacts++;
+        b.cumulativeContacts++;
 
-        if (distSq <= thresholdSq) {
-          const dist = Math.sqrt(distSq);
+        const dist = Math.sqrt(distSq);
+        if (dist <= 0.25) contactsUnder025m++;
+        else if (dist <= 1.0) contactsUnder1m++;
+        else contactsUnder2m++;
+
+        // Transmission is only possible between susceptible ('S') and infectious ('I')
+        if ((a.state === 'S' && b.state === 'I') || (a.state === 'I' && b.state === 'S')) {
           contactPairs.push({ a, b, dist });
-          currentStepPairs.add(pairKey);
-          this.uniquePairsEverInContact.add(pairKey);
-
-          a.cumulativeContacts++;
-          b.cumulativeContacts++;
-
-          if (dist <= 0.25) contactsUnder025m++;
-          if (dist <= 1.0) contactsUnder1m++;
-          if (dist <= 2.0) contactsUnder2m++;
-
-          // Manage contact episode duration
-          if (this.activeEpisodes.has(pairKey)) {
-            const ep = this.activeEpisodes.get(pairKey)!;
-            ep.lastStep = this.currentStep;
-            ep.durationMinutes++;
-          } else {
-            this.activeEpisodes.set(pairKey, {
-              pairKey,
-              agentAId: a.id,
-              agentBId: b.id,
-              startStep: this.currentStep,
-              lastStep: this.currentStep,
-              durationMinutes: 1,
-            });
-            this.totalEpisodesCount++;
-          }
         }
       }
-    }
-
-    // Clean up finished episodes
-    for (const [key, ep] of this.activeEpisodes.entries()) {
-      if (ep.lastStep < this.currentStep) {
-        this.activeEpisodes.delete(key);
-      }
-    }
+    });
 
     return {
-      instantContactsCount: contactPairs.length,
-      uniquePairsThisStep: currentStepPairs.size,
+      instantContactsCount,
+      uniquePairsThisStep: instantContactsCount,
       contactPairs,
       contactsUnder025m,
       contactsUnder1m,

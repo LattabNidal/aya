@@ -177,6 +177,16 @@ export default function App() {
     initSimulation(activeScenarioId, updatedCfg);
   };
 
+  // Population & Initial Infection configuration handler
+  const handleUpdatePopulationParams = (totalPop: number, initialInfected: number) => {
+    const updatedCfg: ScenarioConfig = {
+      ...currentConfig,
+      initialPopulation: totalPop,
+      initialInfectedCount: initialInfected,
+    };
+    initSimulation(activeScenarioId, updatedCfg);
+  };
+
   // Microclimate update handler from CSV import
   const handleUpdateClimateData = (newData: HourlyClimateData[]) => {
     const updatedCfg: ScenarioConfig = {
@@ -229,6 +239,8 @@ export default function App() {
             onUpdateSpatialLayout={setSpatialLayout}
             onNavigateTab={setActiveTab}
             onOpenDetailedReport={() => setIsDetailedReportOpen(true)}
+            onUpdatePopulationParams={handleUpdatePopulationParams}
+            metricsHistory={metricsHistory}
           />
         )}
 
@@ -278,6 +290,7 @@ export default function App() {
             metricsHistory={metricsHistory}
             replicationsCompletedCount={replicationsCompletedCount}
             finalResult={finalResult}
+            onUpdatePopulationParams={handleUpdatePopulationParams}
           />
         )}
 

@@ -11,7 +11,7 @@
  * - Simulation ABM en temps réel avec agents S/I/R, lignes de contacts < 2m et mesure de distance.
  */
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Eye, Layers, MapPin, Ruler, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import { Agent, ScenarioConfig, SpatialLayout, StepMetric } from '../../types/simulation';
 import { SelectedObjectInfo } from './ThreeUrbanScene';
@@ -61,6 +61,7 @@ export const Orthographic2DView: React.FC<Orthographic2DViewProps> = ({
   onHoverCoords,
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Pan & Zoom
   const [zoom, setZoom] = useState<number>(1);
@@ -130,27 +131,161 @@ export const Orthographic2DView: React.FC<Orthographic2DViewProps> = ({
         }
         setMeasurePointA(null);
       }
+      return;
+    }
+
+    // Pick agent on click
+    if (showAgents && onSelectObject) {
+      let closestAgent: Agent | null = null;
+      let minDist = 16; // 16 pixels selection radius
+      for (let i = 0; i < agents.length; i++) {
+        const ag = agents[i];
+        const p = simToPx(ag.x, ag.y);
+        const d = Math.hypot(p.px - pt.px, p.py - pt.py);
+        if (d < minDist) {
+          minDist = d;
+          closestAgent = ag;
+        }
+      }
+      if (closestAgent) {
+        const a = closestAgent;
+        const demLabel =
+          a.demographic === 'elderly'
+            ? 'Personne Âgée (Vulnérable)'
+            : a.demographic === 'child'
+            ? 'Enfant (Élève / Jeune)'
+            : 'Adulte / Jeune Parent';
+        onSelectObject({
+          type: 'agent',
+          id: `agent_${a.id}`,
+          name: `Agent #${a.id} — ${demLabel}`,
+          details: {
+            'Groupe Démographique': demLabel,
+            'Cellule Familiale': `Famille #${a.familyId || 1} (Foyer intergénérationnel)`,
+            'Statut Sanitaire':
+              a.state === 'I'
+                ? 'Infecté (Contagieux)'
+                : a.state === 'R'
+                ? 'Rétabli (Immunisé)'
+                : 'Sain (Susceptible)',
+            'Port du Masque': a.maskWearing ? 'Oui (Atténuation 65%)' : 'Non',
+            'Vitesse Réelle': `${a.speed.toFixed(2)} m/s`,
+            'Contacts Cumulés (<2m)': a.cumulativeContacts,
+            'Vecteur Transmission':
+              a.transmissionPathway === 'fomite'
+                ? 'Surfaces / Fomite (Étal de marché)'
+                : a.transmissionPathway === 'aerosol'
+                ? 'Aérosol (Microclimat ENVI-met)'
+                : 'Sain / Non infecté',
+            'Coordonnées UV9': `X: ${a.x.toFixed(1)}m, Y: ${a.y.toFixed(1)}m`,
+          },
+          position: { x: a.x, y: a.y, z: 1.7 },
+        });
+        return;
+      }
     }
   };
 
-  // Compute 2D Contact Lines (< 2.0m threshold)
+  // Compute 2D Contact Lines (< 2.0m threshold) with high-performance spatial partitioning
   const contactLines: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
   if (showProximityLines && showAgents) {
     const thresholdSq = (config.contamination.contactDistanceThresholdMeters || 2.0) ** 2;
-    for (let i = 0; i < agents.length; i++) {
-      for (let j = i + 1; j < agents.length; j++) {
-        const a1 = agents[i];
-        const a2 = agents[j];
-        const dx = a1.x - a2.x;
-        const dy = a1.y - a2.y;
-        if (dx * dx + dy * dy <= thresholdSq) {
-          const pt1 = simToPx(a1.x, a1.y);
-          const pt2 = simToPx(a2.x, a2.y);
-          contactLines.push({ x1: pt1.px, y1: pt1.py, x2: pt2.px, y2: pt2.py });
+    if (agents.length <= 300) {
+      for (let i = 0; i < agents.length; i++) {
+        for (let j = i + 1; j < agents.length; j++) {
+          const a1 = agents[i];
+          const a2 = agents[j];
+          const dx = a1.x - a2.x;
+          const dy = a1.y - a2.y;
+          if (dx * dx + dy * dy <= thresholdSq) {
+            const pt1 = simToPx(a1.x, a1.y);
+            const pt2 = simToPx(a2.x, a2.y);
+            contactLines.push({ x1: pt1.px, y1: pt1.py, x2: pt2.px, y2: pt2.py });
+            if (contactLines.length >= 800) break;
+          }
         }
+        if (contactLines.length >= 800) break;
+      }
+    } else {
+      // Spatial grid for large populations (up to 10,000 agents)
+      const cellSize = 5.0;
+      const grid = new Map<string, number[]>();
+      const limit = Math.min(agents.length, 6000);
+      for (let i = 0; i < limit; i++) {
+        const a = agents[i];
+        const key = `${Math.floor(a.x / cellSize)}_${Math.floor(a.y / cellSize)}`;
+        const arr = grid.get(key);
+        if (arr) arr.push(i);
+        else grid.set(key, [i]);
+      }
+      for (const [, idxs] of grid) {
+        if (idxs.length > 1) {
+          for (let i = 0; i < idxs.length; i++) {
+            for (let j = i + 1; j < idxs.length; j++) {
+              const a1 = agents[idxs[i]];
+              const a2 = agents[idxs[j]];
+              const dx = a1.x - a2.x;
+              const dy = a1.y - a2.y;
+              if (dx * dx + dy * dy <= thresholdSq) {
+                const pt1 = simToPx(a1.x, a1.y);
+                const pt2 = simToPx(a2.x, a2.y);
+                contactLines.push({ x1: pt1.px, y1: pt1.py, x2: pt2.px, y2: pt2.py });
+                if (contactLines.length >= 800) break;
+              }
+            }
+            if (contactLines.length >= 800) break;
+          }
+        }
+        if (contactLines.length >= 800) break;
       }
     }
   }
+
+  // High-performance Canvas rendering for agents & contacts (< 2.0m)
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, 750, 720);
+
+    if (!showAgents) return;
+
+    // 1. Contact proximity lines (< 2.0m)
+    if (showProximityLines && contactLines.length > 0) {
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 2]);
+      ctx.beginPath();
+      const maxL = Math.min(contactLines.length, 1000);
+      for (let i = 0; i < maxL; i++) {
+        const l = contactLines[i];
+        ctx.moveTo(l.x1, l.y1);
+        ctx.lineTo(l.x2, l.y2);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // 2. Agents rendering (Green = healthy, Red = infected, Yellow = recovered)
+    const len = agents.length;
+    for (let i = 0; i < len; i++) {
+      const a = agents[i];
+      const { px, py } = simToPx(a.x, a.y);
+      const isInf = a.state === 'I';
+      const isRec = a.state === 'R';
+      ctx.fillStyle = isInf ? '#ef4444' : isRec ? '#eab308' : '#22c55e';
+      ctx.beginPath();
+      ctx.arc(px, py, isInf ? 3.4 : 2.7, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Clean white border for contrast
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+    }
+  }, [agents, showAgents, showProximityLines, contactLines]);
 
   return (
     <div className="w-full h-full relative overflow-hidden bg-[#a9a9a9] select-none">
@@ -375,79 +510,16 @@ export const Orthographic2DView: React.FC<Orthographic2DViewProps> = ({
           </g>
         )}
 
-        {/* 8. Lignes de contacts rapprochés (< 2.0m) */}
-        {contactLines.map((l, cIdx) => (
-          <line
-            key={`contact_${cIdx}`}
-            x1={l.x1}
-            y1={l.y1}
-            x2={l.x2}
-            y2={l.y2}
-            stroke="#ef4444"
-            strokeWidth="2"
-            strokeDasharray="3,2"
-            opacity="0.8"
-          />
-        ))}
-
-        {/* 9. Agents de simulation ABM */}
+        {/* 8. Canvas Overlay Haute-Performance pour Agents & Contacts (< 2.0m) */}
         {showAgents && (
-          <g id="agentsGroup">
-            {agents.map((a) => {
-              const pt = simToPx(a.x, a.y);
-              const color = a.state === 'I' ? '#ef4444' : a.state === 'R' ? '#10b981' : '#38bdf8';
-              return (
-                <circle
-                  key={`agent_${a.id}`}
-                  cx={pt.px}
-                  cy={pt.py}
-                  r="3.2"
-                  fill={color}
-                  stroke="#ffffff"
-                  strokeWidth="0.8"
-                  filter="url(#shadowFilter)"
-                  className="cursor-pointer hover:r-4 transition-all"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (onSelectObject) {
-                      const demLabel =
-                        a.demographic === 'elderly'
-                          ? 'Personne Âgée (Vulnérable)'
-                          : a.demographic === 'child'
-                          ? 'Enfant (Élève / Jeune)'
-                          : 'Adulte / Jeune Parent';
-                      onSelectObject({
-                        type: 'agent',
-                        id: `agent_${a.id}`,
-                        name: `Agent #${a.id} — ${demLabel}`,
-                        details: {
-                          'Groupe Démographique': demLabel,
-                          'Cellule Familiale': `Famille #${a.familyId || 1} (Foyer intergénérationnel)`,
-                          'Statut Sanitaire':
-                            a.state === 'I'
-                              ? 'Infecté (Contagieux)'
-                              : a.state === 'R'
-                              ? 'Rétabli (Immunisé)'
-                              : 'Sain (Susceptible)',
-                          'Port du Masque': a.maskWearing ? 'Oui (Atténuation 65%)' : 'Non',
-                          'Vitesse Réelle': `${a.speed.toFixed(2)} m/s`,
-                          'Contacts Cumulés (<2m)': a.cumulativeContacts,
-                          'Vecteur Transmission':
-                            a.transmissionPathway === 'fomite'
-                              ? 'Surfaces / Fomite (Étal de marché)'
-                              : a.transmissionPathway === 'aerosol'
-                              ? 'Aérosol (Microclimat ENVI-met)'
-                              : 'Sain / Non infecté',
-                          'Coordonnées UV9': `X: ${a.x.toFixed(1)}m, Y: ${a.y.toFixed(1)}m`,
-                        },
-                        position: { x: a.x, y: a.y, z: 1.7 },
-                      });
-                    }
-                  }}
-                />
-              );
-            })}
-          </g>
+          <foreignObject x="0" y="0" width="750" height="720" className="pointer-events-none">
+            <canvas
+              ref={canvasRef}
+              width={750}
+              height={720}
+              style={{ width: '100%', height: '100%', display: 'block' }}
+            />
+          </foreignObject>
         )}
 
         {/* 10. Étiquettes repères */}

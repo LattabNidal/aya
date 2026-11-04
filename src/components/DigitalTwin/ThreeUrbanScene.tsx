@@ -518,8 +518,8 @@ export const ThreeUrbanScene = forwardRef<ThreeUrbanSceneRef, ThreeUrbanScenePro
         labelsGroup.add(s);
       });
 
-      // 13. Live Agent Instanced Mesh
-      const maxAgents = 1200;
+      // 13. Live Agent Instanced Mesh (Capacity up to 20,000 agents without limit)
+      const maxAgents = 20000;
       const agentGeo = new THREE.CapsuleGeometry(0.2, 0.45, 6, 8);
       const agentMat = new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.1 });
       const instancedAgents = new THREE.InstancedMesh(agentGeo, agentMat, maxAgents);
@@ -713,19 +713,32 @@ export const ThreeUrbanScene = forwardRef<ThreeUrbanSceneRef, ThreeUrbanScenePro
 
       const dummy = new THREE.Object3D();
       const col = new THREE.Color();
-      const count = Math.min(agents.length, 1200);
+      const maxCap = instanced.instanceMatrix.count;
+      const count = Math.min(agents.length, maxCap);
       instanced.count = count;
 
-      // Color mapping for infection states: S = Blue, E = Amber, I = Red, R = Emerald
-      const COLOR_S = 0x38bdf8;
-      const COLOR_E = 0xf59e0b;
-      const COLOR_I = 0xef4444;
-      const COLOR_R = 0x10b981;
+      // Color mapping according to user specifications:
+      // - Vert (Green): personne saine
+      // - Rouge (Red): personne infectée
+      // - Jaune (Yellow): personne exposée / rétablie
+      const COLOR_S = 0x22c55e; // Vert : sain
+      const COLOR_I = 0xef4444; // Rouge : infecté
+      const COLOR_R = 0xeab308; // Jaune : rétabli / exposé
 
       for (let i = 0; i < count; i++) {
         const a = agents[i];
         const pos3D = simTo3D(a.x, a.y, CURB + 0.35);
         dummy.position.set(pos3D.x, pos3D.y, pos3D.z);
+
+        // Realistic pedestrian orientation facing their travel direction
+        if (a.targetX !== undefined && a.targetY !== undefined) {
+          const dx = a.targetX - a.x;
+          const dy = a.targetY - a.y;
+          if (dx * dx + dy * dy > 0.1) {
+            dummy.rotation.y = -Math.atan2(dy, dx) + Math.PI / 2;
+          }
+        }
+
         dummy.scale.set(1, 1, 1);
         dummy.updateMatrix();
         instanced.setMatrixAt(i, dummy.matrix);
@@ -749,19 +762,62 @@ export const ThreeUrbanScene = forwardRef<ThreeUrbanSceneRef, ThreeUrbanScenePro
           const linePts: number[] = [];
           const thresholdSq = (config.contamination.contactDistanceThresholdMeters || 2.0) ** 2;
 
-          for (let i = 0; i < agents.length; i++) {
-            for (let j = i + 1; j < agents.length; j++) {
-              const a1 = agents[i];
-              const a2 = agents[j];
-              const dx = a1.x - a2.x;
-              const dy = a1.y - a2.y;
-              if (dx * dx + dy * dy <= thresholdSq) {
-                const p1 = simTo3D(a1.x, a1.y, CURB + 0.4);
-                const p2 = simTo3D(a2.x, a2.y, CURB + 0.4);
-                linePts.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+          if (agents.length <= 350) {
+            // Direct pairwise check for moderate populations
+            for (let i = 0; i < agents.length; i++) {
+              for (let j = i + 1; j < agents.length; j++) {
+                const a1 = agents[i];
+                const a2 = agents[j];
+                const dx = a1.x - a2.x;
+                const dy = a1.y - a2.y;
+                if (dx * dx + dy * dy <= thresholdSq) {
+                  const p1 = simTo3D(a1.x, a1.y, CURB + 0.4);
+                  const p2 = simTo3D(a2.x, a2.y, CURB + 0.4);
+                  linePts.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+                  if (linePts.length >= 6000) break;
+                }
+              }
+              if (linePts.length >= 6000) break;
+            }
+          } else {
+            // High-performance spatial hashing for dense populations (5,000+ agents)
+            const cellSize = 5.0;
+            const grid = new Map<string, number[]>();
+            const maxEvaluated = Math.min(agents.length, 10000);
+
+            for (let i = 0; i < maxEvaluated; i++) {
+              const a = agents[i];
+              const cellKey = `${Math.floor(a.x / cellSize)}_${Math.floor(a.y / cellSize)}`;
+              const list = grid.get(cellKey);
+              if (list) {
+                list.push(i);
+              } else {
+                grid.set(cellKey, [i]);
               }
             }
+
+            for (const [, indices] of grid) {
+              if (indices.length > 1) {
+                for (let i = 0; i < indices.length; i++) {
+                  for (let j = i + 1; j < indices.length; j++) {
+                    const a1 = agents[indices[i]];
+                    const a2 = agents[indices[j]];
+                    const dx = a1.x - a2.x;
+                    const dy = a1.y - a2.y;
+                    if (dx * dx + dy * dy <= thresholdSq) {
+                      const p1 = simTo3D(a1.x, a1.y, CURB + 0.4);
+                      const p2 = simTo3D(a2.x, a2.y, CURB + 0.4);
+                      linePts.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+                      if (linePts.length >= 6000) break;
+                    }
+                  }
+                  if (linePts.length >= 6000) break;
+                }
+              }
+              if (linePts.length >= 6000) break;
+            }
           }
+
           proximityLinesRef.current.geometry.setAttribute(
             'position',
             new THREE.Float32BufferAttribute(linePts, 3)

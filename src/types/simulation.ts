@@ -201,6 +201,12 @@ export interface Agent {
   familyId?: number;
   maskWearing?: boolean;
   transmissionPathway?: 'aerosol' | 'fomite';
+  waypoints?: Point[];
+  currentWaypointIdx?: number;
+  destinationNodeId?: string;
+  currentNodeId?: string;
+  previousNodeId?: string;
+  lateralOffset?: number;
 }
 
 export interface StepMetric {
