@@ -671,7 +671,7 @@ export const UrbanDigitalTwinView: React.FC<UrbanDigitalTwinViewProps> = ({
                 {/* 2D Half */}
                 <div className="w-1/2 h-full relative">
                   <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-xs font-bold text-cyan-400">
-                    Cité – Vue 2D (Îlots, Ruelles, Bâtiments)
+                    Modèle urbain – Vue 2D (plan masse)
                   </div>
                   <Orthographic2DView
                     layout={layout}
@@ -693,7 +693,7 @@ export const UrbanDigitalTwinView: React.FC<UrbanDigitalTwinViewProps> = ({
                 {/* 3D Half */}
                 <div className="w-1/2 h-full relative">
                   <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-xs font-bold text-indigo-400">
-                    Cité – Vue 3D Three.js PBR (Ombres, Hauteurs, Arbres)
+                    Modèle urbain – Vue 3D (Ombres, Arbres)
                   </div>
                   <ThreeUrbanScene
                     ref={threeRef}
@@ -723,7 +723,7 @@ export const UrbanDigitalTwinView: React.FC<UrbanDigitalTwinViewProps> = ({
             {viewMode === '2d' && (
               <div className="w-full h-full relative">
                 <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-xs font-bold text-cyan-400">
-                  Cité – Vue 2D Orthographique (Plan Masse Réel)
+                  Modèle urbain – Vue 2D orthographique (plan masse)
                 </div>
                 <Orthographic2DView
                   layout={layout}

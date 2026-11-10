@@ -1,46 +1,36 @@
 /**
- * 3D Urban Digital Twin Scene — Three.js Engine
- * Faithfully integrates the Cite3D architectural model:
- * - 7 Îlots (extruded green lawns with raised curbs)
- * - 7 Ruelles piétonnes (beige paving)
- * - 47 Immeubles (briques/blancs/gris avec arêtes foncées et hauteurs d'étages)
- * - 6 Jardins paysagers (haies et fleurs)
- * - 260 Arbres instanciés
- * - Grande Mosquée avec dôme vert et minaret
- * - Étiquettes repères (École Bousherit, Mosquée, CEM Amar, Base de vie chinoise)
- * - Éclairage PBR avec ombres 2048x2048 et brouillard
- * - Agents de simulation ABM en direct avec statuts S/I/R et lignes de contacts < 2m.
+ * Vue 3D du Jumeau Numérique — modèle urbain "Secteur – ville nouvelle"
+ *
+ * Reprend exactement la scène du fichier "Modèle urbain 3D.html" :
+ * mêmes maillages (50 matériaux), mêmes couleurs, même éclairage (hémisphérique + soleil),
+ * mêmes contrôles (orbite, Maj+glisser / clic droit = déplacer, molette = zoom),
+ * mêmes vues (aérienne, plan, hôtel / mosquée, école, niveau rue) et option « Ombres ».
+ *
+ * Par-dessus ce modèle, l'application superpose la simulation multi-agents (états S/I/R,
+ * lignes de contact < 2 m), la mesure de distance et la sélection d'objets.
  */
 
 import React, { useEffect, useImperativeHandle, useRef, forwardRef, useState } from 'react';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { Agent, ScenarioConfig, SpatialLayout, StepMetric } from '../../types/simulation';
 import {
-  BRICK_COLOR,
-  CITE_BUILDINGS,
-  CITE_GARDENS,
-  CITE_ISLANDS,
-  CITE_LABELS,
-  CITE_LANES,
-  CITE_TREE_SPOTS,
-  createRnd,
-  CURB,
-  distSeg,
-  FLOOR,
-  GREY_COLOR,
-  inGarden,
-  inPoly,
-  nearBuilding,
-  rad,
-  S,
-  simTo3D,
-  threeToSim,
-  WHITE_COLOR,
-  X,
-  Z,
-} from '../../data/cite3dData';
+  BUILDING_MATERIALS,
+  createLabelSprite,
+  createSiteGroup,
+  createSiteRenderer,
+  createSiteScene,
+  GROUND_Y,
+  loadSiteModel,
+  modelToSim,
+  SiteModelData,
+  SiteOrbit,
+  SITE_LABELS,
+  SiteViewKey,
+  setShadows,
+  simToModel,
+  TREE_MATERIALS,
+} from '../../engine/siteModel';
 
 export interface SelectedObjectInfo {
   type: 'building' | 'agent' | 'market' | 'tree' | 'gate' | 'point' | 'furniture' | 'street';
@@ -50,14 +40,17 @@ export interface SelectedObjectInfo {
   position: { x: number; y: number; z?: number };
 }
 
+type CameraPreset = 'isometric' | 'topDown' | 'pedestrian' | 'market' | 'northGate' | 'baseChinoise' | 'ecole' | 'mosque';
+
 export interface ThreeUrbanSceneRef {
   resetCamera: () => void;
-  setCameraPreset: (preset: 'isometric' | 'topDown' | 'pedestrian' | 'market' | 'northGate' | 'baseChinoise' | 'ecole' | 'mosque') => void;
+  setCameraPreset: (preset: CameraPreset) => void;
   captureScreenshot: () => string;
   exportGLTF: (filename?: string) => Promise<void>;
   toggleVariedHeights?: () => void;
   toggleTrees?: () => void;
   toggleLabels?: () => void;
+  toggleShadows?: () => void;
 }
 
 interface ThreeUrbanSceneProps {
@@ -79,7 +72,23 @@ interface ThreeUrbanSceneProps {
   objModelPosY?: number;
   showObjModel?: boolean;
   showProceduralBuildings?: boolean;
+  /** Si défini, pilote l'affichage des arbres depuis l'extérieur. */
+  showTrees?: boolean;
 }
+
+const PRESET_TO_VIEW: Record<CameraPreset, SiteViewKey> = {
+  isometric: 'iso',
+  topDown: 'top',
+  pedestrian: 'rue',
+  ecole: 'ecole',
+  mosque: 'hotel',
+  baseChinoise: 'base',
+  market: 'marche',
+  northGate: 'iso',
+};
+
+const MAX_AGENTS = 20000;
+const AGENT_SCALES = [1, 3, 6] as const;
 
 export const ThreeUrbanScene = forwardRef<ThreeUrbanSceneRef, ThreeUrbanSceneProps>(
   (
@@ -87,14 +96,12 @@ export const ThreeUrbanScene = forwardRef<ThreeUrbanSceneRef, ThreeUrbanScenePro
       layout,
       agents,
       config,
-      stepMetric,
-      scientificMode = false,
       measurementMode = false,
       onMeasurementDone,
       onSelectObject,
       showProximityLines = true,
-      showHeatmapDensity = false,
       onHoverCoords,
+      showTrees: showTreesProp,
     },
     ref
   ) => {
@@ -102,21 +109,26 @@ export const ThreeUrbanScene = forwardRef<ThreeUrbanSceneRef, ThreeUrbanScenePro
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
     const sceneRef = useRef<THREE.Scene | null>(null);
     const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
-    const controlsRef = useRef<OrbitControls | null>(null);
-
-    // Dynamic scene elements
-    const buildingsListRef = useRef<{ mesh: THREE.Mesh; base: number; varied: number }[]>([]);
-    const treeGroupRef = useRef<THREE.Group | null>(null);
+    const orbitRef = useRef<SiteOrbit | null>(null);
+    const sunRef = useRef<THREE.DirectionalLight | null>(null);
+    const modelRef = useRef<SiteModelData | null>(null);
+    const meshesRef = useRef<Record<string, THREE.Mesh>>({});
+    const treeMeshesRef = useRef<THREE.Mesh[]>([]);
     const labelsGroupRef = useRef<THREE.Group | null>(null);
+    const markersGroupRef = useRef<THREE.Group | null>(null);
     const instancedAgentsRef = useRef<THREE.InstancedMesh | null>(null);
     const proximityLinesRef = useRef<THREE.LineSegments | null>(null);
-    const clickablesRef = useRef<THREE.Object3D[]>([]);
     const measurementPointsRef = useRef<THREE.Vector3[]>([]);
     const measurementLineRef = useRef<THREE.Line | null>(null);
+    const needsRenderRef = useRef<boolean>(true);
 
-    const [isVariedHeights, setIsVariedHeights] = useState<boolean>(true);
+    const [isLoading, setIsLoading] = useState<boolean>(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
     const [areTreesVisible, setAreTreesVisible] = useState<boolean>(true);
     const [areLabelsVisible, setAreLabelsVisible] = useState<boolean>(true);
+    const [shadowsOn, setShadowsOn] = useState<boolean>(false);
+    const [agentScaleIdx, setAgentScaleIdx] = useState<number>(1);
+    const agentScale = AGENT_SCALES[agentScaleIdx];
 
     const propsRef = useRef({
       agents,
@@ -137,55 +149,25 @@ export const ThreeUrbanScene = forwardRef<ThreeUrbanSceneRef, ThreeUrbanScenePro
       showProximityLines,
     };
 
-    // Camera presets
-    const setCameraPreset = (preset: 'isometric' | 'topDown' | 'pedestrian' | 'market' | 'northGate' | 'baseChinoise' | 'ecole' | 'mosque') => {
-      const camera = cameraRef.current;
-      const controls = controlsRef.current;
-      if (!camera || !controls) return;
-
-      switch (preset) {
-        case 'isometric':
-          camera.position.set(0, 50, 58);
-          controls.target.set(0, 0, 0);
-          break;
-        case 'topDown':
-          camera.position.set(0, 100, 0.1);
-          controls.target.set(0, 0, 0);
-          break;
-        case 'pedestrian':
-          camera.position.set(X(262), CURB + 1.2, Z(300));
-          controls.target.set(X(262), CURB + 1.2, Z(340));
-          break;
-        case 'ecole':
-          camera.position.set(X(145) - 15, 20, Z(265) + 25);
-          controls.target.set(X(145), 2, Z(265));
-          break;
-        case 'mosque':
-          camera.position.set(X(625) + 15, 22, Z(420) + 20);
-          controls.target.set(X(625), 4, Z(420));
-          break;
-        case 'baseChinoise':
-          camera.position.set(X(465) + 10, 18, Z(60) + 22);
-          controls.target.set(X(465), 1, Z(60));
-          break;
-        case 'market':
-        case 'northGate':
-        default:
-          camera.position.set(0, 50, 58);
-          controls.target.set(0, 0, 0);
-          break;
-      }
-      controls.update();
+    const requestRender = () => {
+      needsRenderRef.current = true;
     };
 
-    const resetCamera = () => {
-      setCameraPreset('isometric');
+    const setCameraPreset = (preset: CameraPreset) => {
+      orbitRef.current?.setView(PRESET_TO_VIEW[preset] || 'iso');
+      requestRender();
     };
+
+    const resetCamera = () => setCameraPreset('isometric');
 
     const captureScreenshot = (): string => {
-      if (!rendererRef.current || !sceneRef.current || !cameraRef.current) return '';
-      rendererRef.current.render(sceneRef.current, cameraRef.current);
-      return rendererRef.current.domElement.toDataURL('image/png');
+      const r = rendererRef.current;
+      const s = sceneRef.current;
+      const c = cameraRef.current;
+      if (!r || !s || !c) return '';
+      orbitRef.current?.apply(c);
+      r.render(s, c);
+      return r.domElement.toDataURL('image/png');
     };
 
     const exportGLTF = (filename = 'Cite3D_Maquette_Numerique.glb'): Promise<void> => {
@@ -219,393 +201,233 @@ export const ThreeUrbanScene = forwardRef<ThreeUrbanSceneRef, ThreeUrbanScenePro
       });
     };
 
-    const toggleVariedHeights = () => {
-      setIsVariedHeights((prev) => {
-        const next = !prev;
-        buildingsListRef.current.forEach((b) => {
-          const h = next ? b.varied : b.base;
-          b.mesh.scale.y = h;
-          b.mesh.position.y = CURB + h / 2;
-        });
-        return next;
-      });
-    };
-
-    const toggleTrees = () => {
-      setAreTreesVisible((prev) => {
-        const next = !prev;
-        if (treeGroupRef.current) treeGroupRef.current.visible = next;
-        return next;
-      });
-    };
-
-    const toggleLabels = () => {
-      setAreLabelsVisible((prev) => {
-        const next = !prev;
-        if (labelsGroupRef.current) labelsGroupRef.current.visible = next;
-        return next;
-      });
-    };
+    const toggleTrees = () => setAreTreesVisible((v) => !v);
+    const toggleLabels = () => setAreLabelsVisible((v) => !v);
+    const toggleShadows = () => setShadowsOn((v) => !v);
 
     useImperativeHandle(ref, () => ({
       resetCamera,
       setCameraPreset,
       captureScreenshot,
       exportGLTF,
-      toggleVariedHeights,
       toggleTrees,
       toggleLabels,
+      toggleShadows,
     }));
 
-    // Mount Three.js Scene
+    useEffect(() => {
+      if (showTreesProp !== undefined) setAreTreesVisible(showTreesProp);
+    }, [showTreesProp]);
+
+    // Marché (orange) et portes d'accès (cyan) de la simulation
+    useEffect(() => {
+      const scene = sceneRef.current;
+      if (!scene) return;
+      if (markersGroupRef.current) {
+        scene.remove(markersGroupRef.current);
+        markersGroupRef.current.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (m.geometry) m.geometry.dispose();
+          const mat = m.material as THREE.Material | undefined;
+          if (mat) mat.dispose();
+        });
+      }
+      const g = new THREE.Group();
+      const mk = config.marketRelocated ? config.marketPosition : { x: layout.market.x, y: layout.market.y };
+      const mm = simToModel(mk.x, mk.y);
+      const pad = new THREE.Mesh(
+        new THREE.BoxGeometry(16, 0.6, 16),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color().setHex(0xf97316, THREE.LinearSRGBColorSpace) })
+      );
+      pad.position.set(mm.x, GROUND_Y + 0.5, mm.z);
+      g.add(pad);
+      const mLabel = createLabelSprite('Marché', 0.7);
+      mLabel.position.set(mm.x, 16, mm.z);
+      g.add(mLabel);
+
+      layout.visitorGates.forEach((gate) => {
+        const gm = simToModel(gate.position.x, gate.position.y);
+        const pillar = new THREE.Mesh(
+          new THREE.CylinderGeometry(2.2, 2.2, 9, 12),
+          new THREE.MeshBasicMaterial({ color: new THREE.Color().setHex(0x06b6d4, THREE.LinearSRGBColorSpace) })
+        );
+        pillar.position.set(gm.x, GROUND_Y + 4.5, gm.z);
+        g.add(pillar);
+      });
+
+      scene.add(g);
+      markersGroupRef.current = g;
+      requestRender();
+    }, [layout, config.marketRelocated, config.marketPosition]);
+
+    // Visibilité des arbres / étiquettes
+    useEffect(() => {
+      treeMeshesRef.current.forEach((m) => (m.visible = areTreesVisible));
+      requestRender();
+    }, [areTreesVisible, isLoading]);
+
+    useEffect(() => {
+      if (labelsGroupRef.current) labelsGroupRef.current.visible = areLabelsVisible;
+      requestRender();
+    }, [areLabelsVisible, isLoading]);
+
+    // Ombres (case « Ombres » du HTML)
+    useEffect(() => {
+      const r = rendererRef.current;
+      const sun = sunRef.current;
+      const model = modelRef.current;
+      if (!r || !sun || !model) return;
+      setShadows(r, sun, model, shadowsOn);
+      requestRender();
+    }, [shadowsOn, isLoading]);
+
+    // Montage de la scène Three.js
     useEffect(() => {
       const container = mountRef.current;
       if (!container) return;
+      let disposed = false;
 
       const width = container.clientWidth || 800;
       const height = container.clientHeight || 550;
 
-      // 1. Scene & Background & Fog
-      const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0xcfd8dc);
-      const fog = new THREE.Fog(0xcfd8dc, 90, 210);
-      scene.fog = fog;
+      const { scene, sun } = createSiteScene();
       sceneRef.current = scene;
+      sunRef.current = sun;
 
-      // 2. Camera & Renderer
-      const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 500);
-      camera.position.set(0, 50, 58);
+      const camera = new THREE.PerspectiveCamera(40, width / height, 1, 4000);
       cameraRef.current = camera;
 
-      const renderer = new THREE.WebGLRenderer({
-        antialias: true,
-        powerPreference: 'high-performance',
-        preserveDrawingBuffer: true,
-      });
+      const renderer = createSiteRenderer();
       renderer.setSize(width, height);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      renderer.shadowMap.enabled = true;
-      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       container.appendChild(renderer.domElement);
       rendererRef.current = renderer;
 
-      // 3. OrbitControls
-      const controls = new OrbitControls(camera, renderer.domElement);
-      controls.maxPolarAngle = Math.PI / 2.05;
-      controls.enableDamping = true;
-      controls.dampingFactor = 0.05;
-      controlsRef.current = controls;
+      const orbit = new SiteOrbit(renderer.domElement);
+      orbit.onChange = requestRender;
+      orbit.setView('iso');
+      orbitRef.current = orbit;
 
-      // 4. Lights
-      const hemiLight = new THREE.HemisphereLight(0xffffff, 0x8d9a7a, 0.85);
-      scene.add(hemiLight);
-
-      const sun = new THREE.DirectionalLight(0xfff2d6, 0.95);
-      sun.position.set(-40, 70, 30);
-      sun.castShadow = true;
-      sun.shadow.mapSize.set(2048, 2048);
-      Object.assign(sun.shadow.camera, {
-        left: -50,
-        right: 50,
-        top: 50,
-        bottom: -50,
-        near: 1,
-        far: 200,
-      });
-      scene.add(sun);
-
-      // 5. Routes (Asphalte)
-      const roadGeo = new THREE.PlaneGeometry(95, 95);
-      const roadMat = new THREE.MeshLambertMaterial({ color: 0xa9a9a9 });
-      const road = new THREE.Mesh(roadGeo, roadMat);
-      road.rotation.x = -Math.PI / 2;
-      road.position.y = -0.02;
-      road.receiveShadow = true;
-      scene.add(road);
-
-      // 6. Îlots : pelouse verte avec bordure surélevée
-      CITE_ISLANDS.forEach((poly) => {
-        const sh = new THREE.Shape();
-        poly.forEach(([px, py], i) => (i ? sh.lineTo(X(px), -Z(py)) : sh.moveTo(X(px), -Z(py))));
-        const m = new THREE.Mesh(
-          new THREE.ExtrudeGeometry(sh, { depth: CURB, bevelEnabled: false }),
-          [
-            new THREE.MeshLambertMaterial({ color: 0x9fc27c }),
-            new THREE.MeshLambertMaterial({ color: 0xd8d4c4 }),
-          ]
-        );
-        m.rotation.x = -Math.PI / 2;
-        m.receiveShadow = true;
-        scene.add(m);
-      });
-
-      // 7. Ruelles piétonnes
-      const laneMat = new THREE.MeshLambertMaterial({ color: 0xcfc6ab });
-      CITE_LANES.forEach(([pts, w]) => {
-        for (let i = 0; i < pts.length - 1; i++) {
-          const [x1, y1] = pts[i];
-          const [x2, y2] = pts[i + 1];
-          const len = Math.hypot(x2 - x1, y2 - y1) * S;
-          const m = new THREE.Mesh(new THREE.BoxGeometry(len, 0.02, w * S), laneMat);
-          m.position.set(X((x1 + x2) / 2), CURB + 0.01, Z((y1 + y2) / 2));
-          m.rotation.y = -Math.atan2(y2 - y1, x2 - x1);
-          m.receiveShadow = true;
-          scene.add(m);
-        }
-      });
-
-      // 8. Immeubles
-      const buildingsList: { mesh: THREE.Mesh; base: number; varied: number }[] = [];
-      const clickables: THREE.Object3D[] = [];
-
-      CITE_BUILDINGS.forEach((bDef, i) => {
-        const { cx, cy, w, d, angle, floors, color, name, id } = bDef;
-        const mesh = new THREE.Mesh(
-          new THREE.BoxGeometry(w * S, 1, d * S),
-          new THREE.MeshLambertMaterial({ color })
-        );
-        mesh.position.x = X(cx);
-        mesh.position.z = Z(cy);
-        mesh.rotation.y = -rad(angle);
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        mesh.name = name;
-        mesh.userData = { id, floors, name, type: 'building', cx, cy, w, d, angle };
-
-        // Dark edge wireframe for architectural clarity
-        const edges = new THREE.LineSegments(
-          new THREE.EdgesGeometry(mesh.geometry),
-          new THREE.LineBasicMaterial({ color: 0x6b5a45, linewidth: 1 })
-        );
-        mesh.add(edges);
-        scene.add(mesh);
-        clickables.push(mesh);
-
-        const j = ((Math.sin(i * 12.9898) * 43758.5453) % 1 + 1) % 1;
-        const baseH = floors * FLOOR;
-        const variedH = floors * FLOOR * (0.7 + j * 0.9);
-
-        mesh.scale.y = variedH;
-        mesh.position.y = CURB + variedH / 2;
-
-        buildingsList.push({ mesh, base: baseH, varied: variedH });
-      });
-      buildingsListRef.current = buildingsList;
-      clickablesRef.current = clickables;
-
-      // 9. Jardins paysagers
-      const hedgeMat = new THREE.MeshLambertMaterial({ color: 0x3f7d3a });
-      const bedMat = new THREE.MeshLambertMaterial({ color: 0x6aa84f });
-      const flowerCols = [0xe53935, 0xfdd835, 0xec407a, 0xffffff, 0xab47bc];
-      const gardenRnd = createRnd(42);
-
-      CITE_GARDENS.forEach(([cx, cy, w, d]) => {
-        const g = new THREE.Group();
-        g.position.set(X(cx), CURB, Z(cy));
-        const W = w * S;
-        const D = d * S;
-
-        const bed = new THREE.Mesh(new THREE.BoxGeometry(W, 0.04, D), bedMat);
-        bed.position.y = 0.02;
-        bed.receiveShadow = true;
-        g.add(bed);
-
-        [
-          [0, D / 2, W, 0.12],
-          [0, -D / 2, W, 0.12],
-          [W / 2, 0, 0.12, D],
-          [-W / 2, 0, 0.12, D],
-        ].forEach(([x, z, sx, sz]) => {
-          const h = new THREE.Mesh(new THREE.BoxGeometry(sx, 0.22, sz), hedgeMat);
-          h.position.set(x, 0.11, z);
-          h.castShadow = true;
-          g.add(h);
-        });
-
-        for (let k = 0; k < 30; k++) {
-          const f = new THREE.Mesh(
-            new THREE.SphereGeometry(0.06, 6, 6),
-            new THREE.MeshLambertMaterial({ color: flowerCols[(gardenRnd() * 5) | 0] })
-          );
-          f.position.set((gardenRnd() - 0.5) * (W - 0.4), 0.08, (gardenRnd() - 0.5) * (D - 0.4));
-          g.add(f);
-        }
-        scene.add(g);
-      });
-
-      // 10. Arbres (260 instanciés)
-      const treeGroup = new THREE.Group();
-      scene.add(treeGroup);
-      treeGroupRef.current = treeGroup;
-
-      const trunks = new THREE.InstancedMesh(
-        new THREE.CylinderGeometry(0.05, 0.07, 1, 6),
-        new THREE.MeshLambertMaterial({ color: 0x6d4c2f }),
-        CITE_TREE_SPOTS.length
-      );
-      const crowns = new THREE.InstancedMesh(
-        new THREE.IcosahedronGeometry(1, 1),
-        new THREE.MeshLambertMaterial({ color: 0xffffff }),
-        CITE_TREE_SPOTS.length
-      );
-      const o = new THREE.Object3D();
-      const col = new THREE.Color();
-      const treeRnd = createRnd(123);
-
-      CITE_TREE_SPOTS.forEach(([px, py], i) => {
-        const h = 0.6 + treeRnd() * 0.5;
-        const r = 0.35 + treeRnd() * 0.3;
-        o.position.set(X(px), CURB + h / 2, Z(py));
-        o.scale.set(1, h, 1);
-        o.updateMatrix();
-        trunks.setMatrixAt(i, o.matrix);
-
-        o.position.set(X(px), CURB + h + r * 0.7, Z(py));
-        o.scale.set(r, r * 1.1, r);
-        o.updateMatrix();
-        crowns.setMatrixAt(i, o.matrix);
-        crowns.setColorAt(i, col.setHSL(0.27 + treeRnd() * 0.07, 0.5, 0.3 + treeRnd() * 0.12));
-      });
-      trunks.castShadow = true;
-      crowns.castShadow = true;
-      treeGroup.add(trunks, crowns);
-
-      // 11. Grande Mosquée
-      const mosqGroup = new THREE.Group();
-      mosqGroup.name = 'Grande Mosquée';
-      mosqGroup.userData = { type: 'building', name: 'Grande Mosquée', details: { Étage: 'R+3', Dôme: '13m' } };
-
-      const mosq = new THREE.Mesh(new THREE.BoxGeometry(5, 1.2, 4), new THREE.MeshLambertMaterial({ color: 0xd0d0d0 }));
-      mosq.position.set(X(625), CURB + 0.6, Z(420));
-      mosq.castShadow = true;
-      mosqGroup.add(mosq);
-
-      const dome = new THREE.Mesh(
-        new THREE.SphereGeometry(1.3, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2),
-        new THREE.MeshLambertMaterial({ color: 0x3f8f7a })
-      );
-      dome.position.set(X(625), CURB + 1.2, Z(420));
-      dome.castShadow = true;
-      mosqGroup.add(dome);
-
-      const mina = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.25, 4.5, 12), new THREE.MeshLambertMaterial({ color: 0xe6e6e6 }));
-      mina.position.set(X(650), CURB + 2.25, Z(405));
-      mina.castShadow = true;
-      mosqGroup.add(mina);
-
-      scene.add(mosqGroup);
-      clickables.push(mosq);
-
-      // 12. Étiquettes sprites
-      const labelsGroup = new THREE.Group();
-      scene.add(labelsGroup);
-      labelsGroupRef.current = labelsGroup;
-
-      CITE_LABELS.forEach(({ text, px, py, y3d }) => {
-        const c = document.createElement('canvas');
-        c.width = 512;
-        c.height = 128;
-        const g = c.getContext('2d');
-        if (g) {
-          g.font = 'bold 44px sans-serif';
-          g.textAlign = 'center';
-          g.fillStyle = '#111827';
-          g.fillText(text, 256, 76);
-        }
-        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true }));
-        s.scale.set(8, 2, 1);
-        s.position.set(X(px), y3d, Z(py));
-        labelsGroup.add(s);
-      });
-
-      // 13. Live Agent Instanced Mesh (Capacity up to 20,000 agents without limit)
-      const maxAgents = 20000;
-      const agentGeo = new THREE.CapsuleGeometry(0.2, 0.45, 6, 8);
-      const agentMat = new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.1 });
-      const instancedAgents = new THREE.InstancedMesh(agentGeo, agentMat, maxAgents);
-      instancedAgents.castShadow = true;
+      // Agents de simulation (capsules instanciées)
+      const agentGeo = new THREE.CapsuleGeometry(0.3, 1.1, 4, 8);
+      const agentMat = new THREE.MeshBasicMaterial();
+      const instancedAgents = new THREE.InstancedMesh(agentGeo, agentMat, MAX_AGENTS);
       instancedAgents.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      instancedAgents.frustumCulled = false;
+      instancedAgents.count = 0;
       scene.add(instancedAgents);
       instancedAgentsRef.current = instancedAgents;
 
-      // 14. Proximity Contact Lines (<2m)
-      const lineGeo = new THREE.BufferGeometry();
-      const lineMat = new THREE.LineBasicMaterial({
-        color: 0xef4444,
-        linewidth: 2,
-        transparent: true,
-        opacity: 0.85,
-      });
-      const proximityLines = new THREE.LineSegments(lineGeo, lineMat);
+      // Lignes de contact (< 2 m)
+      const proximityLines = new THREE.LineSegments(
+        new THREE.BufferGeometry(),
+        new THREE.LineBasicMaterial({ color: 0xef4444, transparent: true, opacity: 0.85 })
+      );
+      proximityLines.frustumCulled = false;
       scene.add(proximityLines);
       proximityLinesRef.current = proximityLines;
 
-      // 15. Raycaster Interactions (Click & Measurement)
+      // Chargement du modèle
+      loadSiteModel()
+        .then((model) => {
+          if (disposed) return;
+          modelRef.current = model;
+          const { group, byMaterial } = createSiteGroup(model);
+          scene.add(group);
+          meshesRef.current = byMaterial;
+          treeMeshesRef.current = TREE_MATERIALS.map((n) => byMaterial[n]).filter(Boolean);
+
+          const labels = new THREE.Group();
+          SITE_LABELS.forEach((l) => {
+            const s = createLabelSprite(l.text);
+            s.position.set(l.x, l.y, l.z);
+            labels.add(s);
+          });
+          scene.add(labels);
+          labelsGroupRef.current = labels;
+
+          setIsLoading(false);
+          requestRender();
+        })
+        .catch((err) => {
+          if (disposed) return;
+          console.error(err);
+          setLoadError(err?.message || 'Impossible de charger le modèle urbain');
+          setIsLoading(false);
+        });
+
+      // Interactions
       const raycaster = new THREE.Raycaster();
       const mouse = new THREE.Vector2();
+      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -GROUND_Y);
+      let downPos: { x: number; y: number } | null = null;
+      let lastHoverKey = '';
 
-      const handleClick = (e: MouseEvent) => {
+      const setMouseFromEvent = (e: MouseEvent) => {
         const rect = renderer.domElement.getBoundingClientRect();
         mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
         mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
+        orbit.apply(camera);
+        camera.updateMatrixWorld();
         raycaster.setFromCamera(mouse, camera);
+      };
 
-        // In measurement mode: measure distance between two points
+      const handleDown = (e: PointerEvent) => {
+        downPos = { x: e.clientX, y: e.clientY };
+      };
+
+      const handleClick = (e: MouseEvent) => {
+        // Ignorer les clics issus d'un glissement (orbite / déplacement)
+        if (downPos && Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 4) return;
+        setMouseFromEvent(e);
+
+        // Mode mesure : distance réelle en mètres entre deux points du sol
         if (propsRef.current.measurementMode) {
-          const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -CURB);
-          const intersectPoint = new THREE.Vector3();
-          if (raycaster.ray.intersectPlane(plane, intersectPoint)) {
-            measurementPointsRef.current.push(intersectPoint);
+          const p = new THREE.Vector3();
+          if (raycaster.ray.intersectPlane(groundPlane, p)) {
+            measurementPointsRef.current.push(p);
             if (measurementPointsRef.current.length === 2) {
-              const p1 = measurementPointsRef.current[0];
-              const p2 = measurementPointsRef.current[1];
-              const distUnits = p1.distanceTo(p2);
-              // In Cite3D, S=0.1 means 1 unit = 10px (~7.6 meters)
-              const distMeters = distUnits * 7.6;
-              const simP1 = threeToSim(p1.x, p1.z);
-              const simP2 = threeToSim(p2.x, p2.z);
+              const [p1, p2] = measurementPointsRef.current;
+              const distMeters = p1.distanceTo(p2);
+              const s1 = modelToSim(p1.x, p1.z);
+              const s2 = modelToSim(p2.x, p2.z);
 
-              // Draw line
               if (measurementLineRef.current) scene.remove(measurementLineRef.current);
-              const lineG = new THREE.BufferGeometry().setFromPoints([p1, p2]);
-              const lineM = new THREE.LineBasicMaterial({ color: 0xf59e0b, linewidth: 3 });
-              const mLine = new THREE.Line(lineG, lineM);
+              const mLine = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints([p1, p2]),
+                new THREE.LineBasicMaterial({ color: 0xf59e0b })
+              );
               scene.add(mLine);
               measurementLineRef.current = mLine;
+              requestRender();
 
-              if (propsRef.current.onMeasurementDone) {
-                propsRef.current.onMeasurementDone(
-                  distMeters,
-                  { x: simP1.simX, y: simP1.simY },
-                  { x: simP2.simX, y: simP2.simY }
-                );
-              }
+              propsRef.current.onMeasurementDone?.(
+                distMeters,
+                { x: s1.simX, y: s1.simY },
+                { x: s2.simX, y: s2.simY }
+              );
               measurementPointsRef.current = [];
             }
           }
           return;
         }
 
-        // Object & Agent selection raycast
-        const selectableTargets = instancedAgentsRef.current
-          ? [...clickablesRef.current, instancedAgentsRef.current]
-          : clickablesRef.current;
-        const intersects = raycaster.intersectObjects(selectableTargets, false);
-        if (intersects.length > 0) {
-          const hit = intersects[0];
-          // Check if agent instanced mesh was hit
-          if (hit.object === instancedAgentsRef.current && hit.instanceId !== undefined) {
-            const agentIdx = hit.instanceId;
-            const ag = propsRef.current.agents[agentIdx];
-            if (ag && propsRef.current.onSelectObject) {
+        // Sélection : agents d'abord, puis éléments bâtis du modèle
+        const onSelect = propsRef.current.onSelectObject;
+        if (!onSelect) return;
+
+        const agentMesh = instancedAgentsRef.current;
+        if (agentMesh && agentMesh.count > 0) {
+          const hit = raycaster.intersectObject(agentMesh, false)[0];
+          if (hit && hit.instanceId !== undefined) {
+            const ag = propsRef.current.agents[hit.instanceId];
+            if (ag) {
               const demLabel =
                 ag.demographic === 'elderly'
                   ? 'Personne Âgée (Vulnérable)'
                   : ag.demographic === 'child'
                   ? 'Enfant (Élève / Jeune)'
                   : 'Adulte / Jeune Parent';
-              propsRef.current.onSelectObject({
+              onSelect({
                 type: 'agent',
                 id: `agent_${ag.id}`,
                 name: `Piéton 3D #${ag.id} — ${demLabel}`,
@@ -619,7 +441,7 @@ export const ThreeUrbanScene = forwardRef<ThreeUrbanSceneRef, ThreeUrbanScenePro
                       ? 'Rétabli (Immunisé)'
                       : 'Sain (Susceptible)',
                   'Port du Masque': ag.maskWearing ? 'Oui (Atténuation 65%)' : 'Non',
-                  'Vitesse': `${ag.speed.toFixed(2)} m/s`,
+                  Vitesse: `${ag.speed.toFixed(2)} m/s`,
                   'Contacts Rapprochés (<2m)': ag.cumulativeContacts,
                   'Vecteur Contamination':
                     ag.transmissionPathway === 'fomite'
@@ -634,220 +456,231 @@ export const ThreeUrbanScene = forwardRef<ThreeUrbanSceneRef, ThreeUrbanScenePro
               return;
             }
           }
+        }
 
-          // Otherwise building hit
-          const bldHit = hit.object;
-          const uData = bldHit.userData;
-          if (uData && propsRef.current.onSelectObject) {
-            const simCoords = threeToSim(bldHit.position.x, bldHit.position.z);
-            propsRef.current.onSelectObject({
-              type: 'building',
-              id: uData.id || 'bld',
-              name: uData.name || bldHit.name || 'Bâtiment',
-              details: {
-                'Niveaux / Étages': `R+${uData.floors || 4}`,
-                Hauteur: `${((uData.floors || 4) * 3.2).toFixed(1)} m`,
-                'Emprise au sol': `${uData.w || 40}m × ${uData.d || 20}m`,
-                Orientation: `${uData.angle || 0}°`,
-                'Coordonnées UV9': `X: ${simCoords.simX}m, Y: ${simCoords.simY}m`,
-              },
-              position: { x: simCoords.simX, y: simCoords.simY, z: (uData.floors || 4) * 3.2 },
-            });
-          }
+        const targets = Object.keys(BUILDING_MATERIALS)
+          .map((n) => meshesRef.current[n])
+          .filter(Boolean);
+        const hit = raycaster.intersectObjects(targets, false)[0];
+        if (hit) {
+          const matName = (hit.object.userData?.siteMaterial as string) || hit.object.name;
+          const label = BUILDING_MATERIALS[matName] || matName;
+          const sim = modelToSim(hit.point.x, hit.point.z);
+          onSelect({
+            type: 'building',
+            id: `${matName}_${Math.round(hit.point.x)}_${Math.round(hit.point.z)}`,
+            name: label,
+            details: {
+              Élément: label,
+              Matériau: matName,
+              'Altitude du point': `${hit.point.y.toFixed(1)} m`,
+              'Position modèle': `X: ${hit.point.x.toFixed(1)} m, Z: ${hit.point.z.toFixed(1)} m`,
+              'Coordonnées UV9': `X: ${sim.simX}m, Y: ${sim.simY}m`,
+            },
+            position: { x: sim.simX, y: sim.simY, z: hit.point.y },
+          });
+        } else {
+          onSelect(null);
         }
       };
 
       const handlePointerMove = (e: MouseEvent) => {
         if (!propsRef.current.onHoverCoords) return;
-        const rect = renderer.domElement.getBoundingClientRect();
-        mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-        mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-        raycaster.setFromCamera(mouse, camera);
-        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -CURB);
-        const intersectPoint = new THREE.Vector3();
-        if (raycaster.ray.intersectPlane(plane, intersectPoint)) {
-          const sim = threeToSim(intersectPoint.x, intersectPoint.z);
-          propsRef.current.onHoverCoords({ x: sim.simX, y: sim.simY });
+        setMouseFromEvent(e);
+        const p = new THREE.Vector3();
+        if (raycaster.ray.intersectPlane(groundPlane, p)) {
+          const sim = modelToSim(p.x, p.z);
+          const key = `${sim.simX}_${sim.simY}`;
+          if (key !== lastHoverKey) {
+            lastHoverKey = key;
+            propsRef.current.onHoverCoords({ x: sim.simX, y: sim.simY });
+          }
         }
       };
 
+      renderer.domElement.addEventListener('pointerdown', handleDown);
       renderer.domElement.addEventListener('click', handleClick);
       renderer.domElement.addEventListener('mousemove', handlePointerMove);
 
-      // Handle Resize
       const handleResize = () => {
-        if (!container || !rendererRef.current || !cameraRef.current) return;
         const w = container.clientWidth || 800;
         const h = container.clientHeight || 550;
-        cameraRef.current.aspect = w / h;
-        cameraRef.current.updateProjectionMatrix();
-        rendererRef.current.setSize(w, h);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, h);
+        requestRender();
       };
       window.addEventListener('resize', handleResize);
+      const resizeObserver = new ResizeObserver(handleResize);
+      resizeObserver.observe(container);
+      handleResize();
 
-      // Animation Loop
-      let animId: number;
+      // Boucle de rendu à la demande (le modèle compte ~800 000 triangles)
+      let animId = 0;
       const animate = () => {
         animId = requestAnimationFrame(animate);
-        controls.update();
+        if (!needsRenderRef.current) return;
+        needsRenderRef.current = false;
+        orbit.apply(camera);
         renderer.render(scene, camera);
       };
       animate();
 
       return () => {
+        disposed = true;
         cancelAnimationFrame(animId);
         window.removeEventListener('resize', handleResize);
+        resizeObserver.disconnect();
+        renderer.domElement.removeEventListener('pointerdown', handleDown);
         renderer.domElement.removeEventListener('click', handleClick);
         renderer.domElement.removeEventListener('mousemove', handlePointerMove);
-        if (renderer.domElement.parentNode) {
-          renderer.domElement.parentNode.removeChild(renderer.domElement);
-        }
+        orbit.dispose();
+        agentGeo.dispose();
+        agentMat.dispose();
+        instancedAgents.dispose();
+        proximityLines.geometry.dispose();
+        // Géométries et matériaux du modèle sont partagés (cache) : on ne les libère pas.
+        if (renderer.domElement.parentNode) renderer.domElement.parentNode.removeChild(renderer.domElement);
         renderer.dispose();
+        rendererRef.current = null;
+        sceneRef.current = null;
+        cameraRef.current = null;
+        orbitRef.current = null;
+        sunRef.current = null;
+        instancedAgentsRef.current = null;
+        proximityLinesRef.current = null;
       };
     }, []);
 
-    // Synchronize Live Simulation Agents & Contacts
+    // Synchronisation des agents et des lignes de contact
     useEffect(() => {
       const instanced = instancedAgentsRef.current;
       if (!instanced) return;
 
       const dummy = new THREE.Object3D();
       const col = new THREE.Color();
-      const maxCap = instanced.instanceMatrix.count;
-      const count = Math.min(agents.length, maxCap);
+      const count = Math.min(agents.length, MAX_AGENTS);
       instanced.count = count;
 
-      // Color mapping according to user specifications:
-      // - Vert (Green): personne saine
-      // - Rouge (Red): personne infectée
-      // - Jaune (Yellow): personne exposée / rétablie
       const COLOR_S = 0x22c55e; // Vert : sain
       const COLOR_I = 0xef4444; // Rouge : infecté
       const COLOR_R = 0xeab308; // Jaune : rétabli / exposé
+      const half = 0.85 * agentScale; // demi-hauteur de la capsule mise à l'échelle
 
       for (let i = 0; i < count; i++) {
         const a = agents[i];
-        const pos3D = simTo3D(a.x, a.y, CURB + 0.35);
-        dummy.position.set(pos3D.x, pos3D.y, pos3D.z);
+        const p = simToModel(a.x, a.y);
+        dummy.position.set(p.x, GROUND_Y + half, p.z);
 
-        // Realistic pedestrian orientation facing their travel direction
         if (a.targetX !== undefined && a.targetY !== undefined) {
           const dx = a.targetX - a.x;
           const dy = a.targetY - a.y;
-          if (dx * dx + dy * dy > 0.1) {
-            dummy.rotation.y = -Math.atan2(dy, dx) + Math.PI / 2;
-          }
+          if (dx * dx + dy * dy > 0.1) dummy.rotation.y = -Math.atan2(dy, dx) + Math.PI / 2;
         }
 
-        dummy.scale.set(1, 1, 1);
+        dummy.scale.setScalar(agentScale);
         dummy.updateMatrix();
         instanced.setMatrixAt(i, dummy.matrix);
 
-        let stateColor = COLOR_S;
-        if (a.state === 'I') stateColor = COLOR_I;
-        else if (a.state === 'R') stateColor = COLOR_R;
-
-        col.setHex(stateColor);
+        const hex = a.state === 'I' ? COLOR_I : a.state === 'R' ? COLOR_R : COLOR_S;
+        col.setHex(hex, THREE.LinearSRGBColorSpace);
         instanced.setColorAt(i, col);
       }
       instanced.instanceMatrix.needsUpdate = true;
       if (instanced.instanceColor) instanced.instanceColor.needsUpdate = true;
 
-      // Update Contact proximity lines (< 2.0m)
-      if (proximityLinesRef.current) {
+      const lines = proximityLinesRef.current;
+      if (lines) {
         if (!showProximityLines) {
-          proximityLinesRef.current.visible = false;
+          lines.visible = false;
         } else {
-          proximityLinesRef.current.visible = true;
+          lines.visible = true;
           const linePts: number[] = [];
           const thresholdSq = (config.contamination.contactDistanceThresholdMeters || 2.0) ** 2;
+          const y = GROUND_Y + 1.2 * agentScale;
+          const addLine = (a1: Agent, a2: Agent) => {
+            const p1 = simToModel(a1.x, a1.y);
+            const p2 = simToModel(a2.x, a2.y);
+            linePts.push(p1.x, y, p1.z, p2.x, y, p2.z);
+          };
 
           if (agents.length <= 350) {
-            // Direct pairwise check for moderate populations
-            for (let i = 0; i < agents.length; i++) {
+            outer: for (let i = 0; i < agents.length; i++) {
               for (let j = i + 1; j < agents.length; j++) {
-                const a1 = agents[i];
-                const a2 = agents[j];
-                const dx = a1.x - a2.x;
-                const dy = a1.y - a2.y;
+                const dx = agents[i].x - agents[j].x;
+                const dy = agents[i].y - agents[j].y;
                 if (dx * dx + dy * dy <= thresholdSq) {
-                  const p1 = simTo3D(a1.x, a1.y, CURB + 0.4);
-                  const p2 = simTo3D(a2.x, a2.y, CURB + 0.4);
-                  linePts.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
-                  if (linePts.length >= 6000) break;
+                  addLine(agents[i], agents[j]);
+                  if (linePts.length >= 6000) break outer;
                 }
               }
-              if (linePts.length >= 6000) break;
             }
           } else {
-            // High-performance spatial hashing for dense populations (5,000+ agents)
             const cellSize = 5.0;
             const grid = new Map<string, number[]>();
             const maxEvaluated = Math.min(agents.length, 10000);
-
             for (let i = 0; i < maxEvaluated; i++) {
               const a = agents[i];
-              const cellKey = `${Math.floor(a.x / cellSize)}_${Math.floor(a.y / cellSize)}`;
-              const list = grid.get(cellKey);
-              if (list) {
-                list.push(i);
-              } else {
-                grid.set(cellKey, [i]);
-              }
+              const key = `${Math.floor(a.x / cellSize)}_${Math.floor(a.y / cellSize)}`;
+              const list = grid.get(key);
+              if (list) list.push(i);
+              else grid.set(key, [i]);
             }
-
-            for (const [, indices] of grid) {
-              if (indices.length > 1) {
-                for (let i = 0; i < indices.length; i++) {
-                  for (let j = i + 1; j < indices.length; j++) {
-                    const a1 = agents[indices[i]];
-                    const a2 = agents[indices[j]];
-                    const dx = a1.x - a2.x;
-                    const dy = a1.y - a2.y;
-                    if (dx * dx + dy * dy <= thresholdSq) {
-                      const p1 = simTo3D(a1.x, a1.y, CURB + 0.4);
-                      const p2 = simTo3D(a2.x, a2.y, CURB + 0.4);
-                      linePts.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
-                      if (linePts.length >= 6000) break;
-                    }
+            outerGrid: for (const [, idx] of grid) {
+              for (let i = 0; i < idx.length; i++) {
+                for (let j = i + 1; j < idx.length; j++) {
+                  const a1 = agents[idx[i]];
+                  const a2 = agents[idx[j]];
+                  const dx = a1.x - a2.x;
+                  const dy = a1.y - a2.y;
+                  if (dx * dx + dy * dy <= thresholdSq) {
+                    addLine(a1, a2);
+                    if (linePts.length >= 6000) break outerGrid;
                   }
-                  if (linePts.length >= 6000) break;
                 }
               }
-              if (linePts.length >= 6000) break;
             }
           }
 
-          proximityLinesRef.current.geometry.setAttribute(
-            'position',
-            new THREE.Float32BufferAttribute(linePts, 3)
-          );
-          proximityLinesRef.current.geometry.computeBoundingSphere();
+          lines.geometry.setAttribute('position', new THREE.Float32BufferAttribute(linePts, 3));
+          lines.geometry.computeBoundingSphere();
         }
       }
-    }, [agents, showProximityLines, config]);
+      requestRender();
+    }, [agents, showProximityLines, config, agentScale]);
 
     return (
       <div className="w-full h-full relative group">
         <div ref={mountRef} className="w-full h-full min-h-[550px] cursor-grab active:cursor-grabbing" />
 
-        {/* Floating Quick Action Overlay matching Cite3D Controls */}
-        <div className="absolute top-3 right-3 z-20 flex items-center gap-1.5 bg-slate-900/85 backdrop-blur-md px-3 py-1.5 rounded-lg border border-slate-700/80 text-xs shadow-lg">
+        {isLoading && (
+          <div className="absolute inset-0 z-30 grid place-items-center bg-slate-950/80 text-slate-200 text-sm">
+            Chargement du modèle…
+          </div>
+        )}
+        {loadError && (
+          <div className="absolute inset-0 z-30 grid place-items-center bg-slate-950/90 text-rose-300 text-sm px-6 text-center">
+            {loadError}
+          </div>
+        )}
+
+        {/* Commandes rapides (case « Ombres » du modèle d'origine + calques) */}
+        <div className="absolute top-9 left-2 z-20 flex flex-wrap items-center gap-1.5 max-w-[calc(100%-22rem)] bg-slate-900/85 backdrop-blur-md px-3 py-1.5 rounded-lg border border-slate-700/80 text-xs shadow-lg">
           <button
-            onClick={toggleVariedHeights}
+            onClick={toggleShadows}
             className={`px-2 py-0.5 rounded font-medium transition ${
-              isVariedHeights ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+              shadowsOn ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
             }`}
-            title="Basculer entre hauteurs d'immeubles variées et régulières"
+            title="Activer ou désactiver les ombres portées du soleil"
           >
-            {isVariedHeights ? 'Hauteurs variées' : 'Hauteurs régulières'}
+            Ombres
           </button>
           <button
             onClick={toggleTrees}
             className={`px-2 py-0.5 rounded font-medium transition ${
               areTreesVisible ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
             }`}
-            title="Afficher ou masquer les 260 arbres de la cité"
+            title="Afficher ou masquer les arbres (troncs, feuillages, conifères, palmiers)"
           >
             Arbres
           </button>
@@ -856,10 +689,22 @@ export const ThreeUrbanScene = forwardRef<ThreeUrbanSceneRef, ThreeUrbanScenePro
             className={`px-2 py-0.5 rounded font-medium transition ${
               areLabelsVisible ? 'bg-cyan-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
             }`}
-            title="Afficher ou masquer les étiquettes repères (École, Mosquée, CEM...)"
+            title="Afficher ou masquer les étiquettes repères"
           >
             Étiquettes
           </button>
+          <button
+            onClick={() => setAgentScaleIdx((i) => (i + 1) % AGENT_SCALES.length)}
+            className="px-2 py-0.5 rounded font-medium transition bg-purple-600 text-white hover:bg-purple-500"
+            title="Taille d'affichage des agents (le secteur fait ~520 m de large)"
+          >
+            Agents ×{agentScale}
+          </button>
+        </div>
+
+        <div className="absolute bottom-3 right-3 z-20 max-w-[420px] text-[11px] leading-snug text-slate-200 bg-slate-900/80 backdrop-blur-md px-3 py-1.5 rounded-lg border border-slate-700/80">
+          Glisser : orbite · Maj+glisser / clic droit : déplacer · Molette : zoom. Hauteurs des bâtiments estimées
+          (absentes du DWG).
         </div>
       </div>
     );

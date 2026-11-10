@@ -5,7 +5,7 @@
  * and direct spatial adapter syncing with the simulation engine for Scenarios S0 to S4.
  */
 
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Building2,
@@ -44,6 +44,7 @@ import { SketchUpWarehouseGuideModal } from './SketchUpWarehouseGuideModal';
 import { ModelImporter } from './ModelImporter';
 import { parseObjTo2DLayout } from '../../services/objToSpatialLayout';
 import { INITIAL_SPATIAL_LAYOUT } from '../../engine/spatial';
+import { getSitePlanImage } from '../../engine/siteModel';
 import { Building, MarketZone, ScenarioConfig, ScenarioId, SpatialLayout, StreetCorridor, UrbanFurniture, VegetationZone, VisitorGate } from '../../types/simulation';
 
 interface SiteModelingViewProps {
@@ -77,6 +78,17 @@ export const SiteModelingView: React.FC<SiteModelingViewProps> = ({
   // Current Workflow Step (1 to 10)
   const [currentStep, setCurrentStep] = useState<number>(1);
   const [viewMode, setViewMode] = useState<'plan2D' | 'modelImporter'>('plan2D');
+  // Plan 2D du modèle urbain (rendu du dessus du modèle "Modèle urbain 3D")
+  const [sitePlanUrl, setSitePlanUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    getSitePlanImage()
+      .then((u) => alive && setSitePlanUrl(u))
+      .catch((e) => console.error('Plan 2D du modèle indisponible', e));
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // Import State
   const [importedFileName, setImportedFileName] = useState<string | null>(null);
@@ -3347,13 +3359,26 @@ export const SiteModelingView: React.FC<SiteModelingViewProps> = ({
               >
                 <rect width={layout.width} height={layout.height} fill="#0b1329" />
 
+                {/* Plan 2D du modèle urbain (même géométrie que la 3D) */}
+                {sitePlanUrl && (
+                  <image
+                    href={sitePlanUrl}
+                    x="0"
+                    y="0"
+                    width={layout.width}
+                    height={layout.height}
+                    preserveAspectRatio="none"
+                    style={{ pointerEvents: 'none' }}
+                  />
+                )}
+
                 {/* Grid overlay */}
                 <defs>
                   <pattern id="siteGrid" width="25" height="25" patternUnits="userSpaceOnUse">
                     <path d="M 25 0 L 0 0 0 25" fill="none" stroke="#1e293b" strokeWidth="0.8" />
                   </pattern>
                 </defs>
-                <rect width={layout.width} height={layout.height} fill="url(#siteGrid)" opacity="0.6" />
+                <rect width={layout.width} height={layout.height} fill="url(#siteGrid)" opacity={sitePlanUrl ? 0.25 : 0.6} />
 
                 {/* Imported Image Overlay / Reference Blueprint Calque */}
                 {(importedPreviewUrl || layout.referencePlanUrl) && (
