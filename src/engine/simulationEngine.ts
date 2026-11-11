@@ -14,7 +14,7 @@
 
 import { getAmbientClimate, stepToClockTime } from './environmental';
 import { PRNG } from './prng';
-import { clampToTerrain, INITIAL_SPATIAL_LAYOUT, isInsideBuilding, isInsideVegetation } from './spatial';
+import { INITIAL_SPATIAL_LAYOUT } from './spatial';
 import { computeTransmissionRisk } from './contamination';
 import {
   Agent,
@@ -25,19 +25,17 @@ import {
   SpatialLayout,
   StepMetric,
 } from '../types/simulation';
+import { getDailyPeakHourSurge } from '../data/cite3dData';
 import {
-  CITE_ATTRACTORS,
-  getDailyPeakHourSurge,
-  getRandomCiteWalkablePoint,
-  isCiteBuildingObstacle,
-  pxToSim,
-  simToPx,
-} from '../data/cite3dData';
-import {
-  buildPedestrianRoute,
-  findNearestNode,
-  getRandomStreetNeighbor,
-} from './pedestrianNavigation';
+  advance,
+  gatePoint,
+  getField,
+  isShadedByVegetation,
+  nearestWalkable,
+  pickDestination,
+  randomWalkablePoint,
+  remainingDistance,
+} from './walkNav';
 
 interface GridCell {
   agents: Agent[];
@@ -229,9 +227,8 @@ export class SimulationInstance {
       const familyId = Math.floor(i / 4) + 1;
 
       // Spawn on authentic walkable Cite3D coordinate (ruelles / courtyards)
-      const spawnPoint = getRandomCiteWalkablePoint(this.prng);
-      const startNode = findNearestNode(spawnPoint.simX, spawnPoint.simY);
-      const nextNode = getRandomStreetNeighbor(startNode.id, undefined, this.prng);
+      const spawnPoint = randomWalkablePoint(this.prng);
+      const dest = pickDestination(this.prng, demographic, this.layout.market);
 
       const chosenStreet = streets[i % streets.length];
       const state = i < safeInfectedCount ? 'I' : 'S';
@@ -241,10 +238,12 @@ export class SimulationInstance {
 
       const agent: Agent = {
         id: this.nextAgentId++,
-        x: spawnPoint.simX,
-        y: spawnPoint.simY,
-        targetX: nextNode.simX,
-        targetY: nextNode.simY,
+        x: spawnPoint.x,
+        y: spawnPoint.y,
+        targetX: dest.x,
+        targetY: dest.y,
+        navDestX: dest.x,
+        navDestY: dest.y,
         speed: this.config.pedestrianSpeedMs * speedFactor * (0.9 + 0.2 * this.prng.nextFloat()),
         street: chosenStreet,
         isVisitor: false,
@@ -257,9 +256,6 @@ export class SimulationInstance {
         demographic,
         familyId,
         maskWearing,
-        currentNodeId: startNode.id,
-        previousNodeId: undefined,
-        destinationNodeId: nextNode.id,
         lateralOffset: (this.prng.nextFloat() - 0.5) * 1.6,
       };
 
@@ -288,18 +284,24 @@ export class SimulationInstance {
       }
 
       // Visitors navigate towards informal market & commercial front along streets
-      const startNode = findNearestNode(gate.position.x, gate.position.y);
-      const nextNode = getRandomStreetNeighbor(startNode.id, undefined, this.prng);
+      const entry = gatePoint(
+        gate.position.x + (this.prng.nextFloat() - 0.5) * 3,
+        gate.position.y + (this.prng.nextFloat() - 0.5) * 3
+      );
+      const visitorDemographic: DemographicGroup = this.prng.nextFloat() < 0.25 ? 'elderly' : 'adult';
+      const dest = pickDestination(this.prng, visitorDemographic, this.layout.market);
 
       const isMaskMandate = this.config.id === 'S1' || this.config.id === 'S4';
       const maskWearing = isMaskMandate ? this.prng.nextFloat() < 0.75 : false;
 
       const agent: Agent = {
         id: this.nextAgentId++,
-        x: gate.position.x + (this.prng.nextFloat() - 0.5) * 3,
-        y: gate.position.y + (this.prng.nextFloat() - 0.5) * 3,
-        targetX: nextNode.simX,
-        targetY: nextNode.simY,
+        x: entry.x,
+        y: entry.y,
+        targetX: dest.x,
+        targetY: dest.y,
+        navDestX: dest.x,
+        navDestY: dest.y,
         speed: this.config.pedestrianSpeedMs * (0.85 + 0.3 * this.prng.nextFloat()),
         street: gate.targetStreet,
         isVisitor: true,
@@ -308,11 +310,8 @@ export class SimulationInstance {
         entryStep: this.currentStep,
         dwellTimeRemaining: this.prng.nextInt(30, 110),
         activeEpisodesWith: new Set(),
-        demographic: this.prng.nextFloat() < 0.25 ? 'elderly' : 'adult',
+        demographic: visitorDemographic,
         maskWearing,
-        currentNodeId: startNode.id,
-        previousNodeId: undefined,
-        destinationNodeId: nextNode.id,
         lateralOffset: (this.prng.nextFloat() - 0.5) * 1.6,
       };
 
@@ -382,7 +381,7 @@ export class SimulationInstance {
 
       if (susceptible && infectious) {
         // Check if agent is currently inside an active vegetation canopy
-        const inVeg = isInsideVegetation(susceptible.x, susceptible.y, this.layout, this.config.id);
+        const inVeg = isShadedByVegetation(susceptible.x, susceptible.y, this.config.id, this.config.additionalVegetation);
 
         // Effective temperature & wind microclimate
         const effectiveTemp = inVeg
@@ -519,89 +518,55 @@ export class SimulationInstance {
   }
 
   /**
-   * Moves agents respecting Cite3D geometry, family clusters, and peak hour flow surges.
-   * Both infected and healthy agents actively navigate realistic pedestrian corridors
-   * without colliding with walls.
+   * Déplace les agents sur la géométrie réelle du modèle urbain (voir walkNav.ts) :
+   * ils marchent sur trottoirs, places et chaussées, contournent les bâtiments, haies et troncs,
+   * rejoignent des lieux (marché, école, mosquée, places) selon leur profil, puis marquent une pause.
    */
   private moveAgents(flowSurge: number = 1.0): void {
-    const market = this.config.marketRelocated
-      ? { x: this.config.marketPosition.x, y: this.config.marketPosition.y, width: 35, height: 35 }
-      : this.layout.market;
+    const market = this.layout.market;
 
     for (let i = 0; i < this.agents.length; i++) {
       const a = this.agents[i];
 
-      // Check if inside informal market (crowded browsing pace)
-      const inMarket =
-        a.x >= market.x &&
-        a.x <= market.x + market.width &&
-        a.y >= market.y &&
-        a.y <= market.y + market.height;
-
-      // Speed modifier: market stall density slows movement, peak hours accelerate street flows
+      // Marché : la densité des étals ralentit la marche, les pics horaires l'accélèrent
+      const inMarket = a.x >= market.x && a.x <= market.x + market.width && a.y >= market.y && a.y <= market.y + market.height;
       const speedModifier = (inMarket ? 0.65 : 1.0) * flowSurge;
-      // Step distance: 2.8m - 4.5m per minute step for fluid visible progression
       const stepDistanceMeters = a.speed * 2.8 * speedModifier;
 
-      // Ensure agent has a valid target node
-      if (a.targetX === undefined || a.targetY === undefined || !a.destinationNodeId) {
-        const near = findNearestNode(a.x, a.y);
-        const next = getRandomStreetNeighbor(near.id, a.previousNodeId, this.prng);
-        a.currentNodeId = near.id;
-        a.destinationNodeId = next.id;
-        a.targetX = next.simX;
-        a.targetY = next.simY;
+      if (a.navDestX === undefined || a.navDestY === undefined) {
+        const d = pickDestination(this.prng, a.demographic, market);
+        a.navDestX = d.x;
+        a.navDestY = d.y;
       }
 
-      let dx = a.targetX - a.x;
-      let dy = a.targetY - a.y;
-      let distToWp = Math.hypot(dx, dy);
+      // Pause à l'arrivée (discussion, achat, prière)
+      if (a.navPauseUntil !== undefined && this.currentStep < a.navPauseUntil) continue;
 
-      // Reached street intersection / node -> spontaneously choose next connected street/ruelle like a real pedestrian
-      if (distToWp < 2.5) {
-        const currId = a.destinationNodeId || a.currentNodeId || findNearestNode(a.x, a.y).id;
-        const nextNode = getRandomStreetNeighbor(currId, a.previousNodeId, this.prng);
-        a.previousNodeId = currId;
-        a.currentNodeId = nextNode.id;
-        a.destinationNodeId = nextNode.id;
-        a.targetX = nextNode.simX;
-        a.targetY = nextNode.simY;
+      const { field } = getField(a.navDestX, a.navDestY);
+      const remaining = remainingDistance(field, a.x, a.y);
 
-        dx = a.targetX - a.x;
-        dy = a.targetY - a.y;
-        distToWp = Math.hypot(dx, dy);
+      if (!Number.isFinite(remaining)) {
+        // Position invalide : ramener sur le réseau praticable
+        const p = nearestWalkable(a.x, a.y);
+        a.x = p.x;
+        a.y = p.y;
+        continue;
       }
 
-      // Advance along vector towards target node
-      const moveDist = Math.min(distToWp, stepDistanceMeters);
-      const dirX = distToWp > 0.01 ? dx / distToWp : 0;
-      const dirY = distToWp > 0.01 ? dy / distToWp : 0;
-
-      // Primary forward step along street axis
-      let nextX = a.x + dirX * moveDist;
-      let nextY = a.y + dirY * moveDist;
-
-      // Natural lateral dispersion along sidewalk / street corridor width
-      const lat = a.lateralOffset || 0;
-      const perpX = -dirY * lat;
-      const perpY = dirX * lat;
-      const tryX = nextX + perpX;
-      const tryY = nextY + perpY;
-
-      // Strict obstacle avoidance: test if dispersed point clears buildings
-      if (!isCiteBuildingObstacle(tryX, tryY, 1.2) && !isInsideBuilding(tryX, tryY, this.layout)) {
-        nextX = tryX;
-        nextY = tryY;
-      } else if (isCiteBuildingObstacle(nextX, nextY, 0.8) || isInsideBuilding(nextX, nextY, this.layout)) {
-        // If center-line is also close, nudge towards target node
-        const nudgeAngle = Math.atan2(a.targetY - a.y, a.targetX - a.x);
-        nextX = a.x + Math.cos(nudgeAngle) * Math.min(1.5, moveDist);
-        nextY = a.y + Math.sin(nudgeAngle) * Math.min(1.5, moveDist);
+      if (remaining < 3) {
+        a.navPauseUntil = this.currentStep + this.prng.nextInt(2, 10);
+        const d = pickDestination(this.prng, a.demographic, market, { x: a.navDestX, y: a.navDestY });
+        a.navDestX = d.x;
+        a.navDestY = d.y;
+        continue;
       }
 
-      const clamped = clampToTerrain({ x: nextX, y: nextY }, this.layout);
-      a.x = clamped.x;
-      a.y = clamped.y;
+      const r = advance(field, a.x, a.y, Math.min(stepDistanceMeters, remaining), (a.lateralOffset || 0) / 0.8);
+      a.x = r.x;
+      a.y = r.y;
+      // Point visé quelques mètres devant : sert à orienter l'agent dans la vue 3D
+      a.targetX = r.x + r.dirX * 5;
+      a.targetY = r.y + r.dirY * 5;
     }
   }
 

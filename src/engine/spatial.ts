@@ -21,8 +21,8 @@ import {
 } from '../types/simulation';
 
 export const INITIAL_SPATIAL_LAYOUT: SpatialLayout = {
-  width: 500, // 500 mètres
-  height: 400, // 400 mètres
+  width: 520, // 520 mètres (emprise du modèle urbain, repère simulation = modèle + (260, 263))
+  height: 525, // 525 mètres
   note: 'Reconstruction exacte du plan de site UV9 Ali Mendjeli (Îlots, Ruelles en U, École Bousherit, Mosquée, Front Commercial)',
   referencePlanUrl: '/assets/aistudio/image_9d4e1949.png',
   metersPerPixel: 0.76, // 662 × 651 px -> ~503m × 495m
@@ -1134,10 +1134,10 @@ export const INITIAL_SPATIAL_LAYOUT: SpatialLayout = {
   market: {
     id: 'mkt_informel',
     name: 'Marché Informel (Étals de fruits, légumes & vendeurs ambulants)',
-    x: 278,
-    y: 196,
-    width: 44,
-    height: 48,
+    x: 285, // rue piétonne centrale du modèle (repère simulation)
+    y: 230,
+    width: 40,
+    height: 30,
     stallCount: 36,
     attractionFactor: 2.4, // Fort pôle d’attraction et ralentissement piétonnier
   },
@@ -1146,10 +1146,10 @@ export const INITIAL_SPATIAL_LAYOUT: SpatialLayout = {
   // 7. PORTES D’ENTRÉE VISITEURS (Gates)
   // ==========================================
   visitorGates: [
-    { id: 'gate_north', name: 'Porte Nord (Station Tramway / Entrée Nord)', position: { x: 358, y: 8 }, targetStreet: 'RueA', weight: 0.38 },
-    { id: 'gate_south', name: 'Porte Sud (Rocade Sud / Marché)', position: { x: 356, y: 395 }, targetStreet: 'RueA', weight: 0.32 },
-    { id: 'gate_west', name: 'Accès Ouest (École / UV10)', position: { x: 8, y: 172 }, targetStreet: 'RueB', weight: 0.15 },
-    { id: 'gate_east', name: 'Accès Est (Axe Clinique / UV8)', position: { x: 492, y: 172 }, targetStreet: 'RueB', weight: 0.15 },
+    { id: 'gate_north', name: 'Porte Nord (Station Tramway / Entrée Nord)', position: { x: 300, y: 8 }, targetStreet: 'RueA', weight: 0.38 },
+    { id: 'gate_south', name: 'Porte Sud (Rocade Sud / Marché)', position: { x: 395, y: 518 }, targetStreet: 'RueA', weight: 0.32 },
+    { id: 'gate_west', name: 'Accès Ouest (École / UV10)', position: { x: 8, y: 280 }, targetStreet: 'RueB', weight: 0.15 },
+    { id: 'gate_east', name: 'Accès Est (Axe Clinique / UV8)', position: { x: 512, y: 150 }, targetStreet: 'RueB', weight: 0.15 },
   ],
 
   // ==========================================
@@ -1173,8 +1173,8 @@ export const INITIAL_SPATIAL_LAYOUT: SpatialLayout = {
  * Moved from congested Rue A corridor to an open ventilated esplanade on the southwest along Rue D.
  */
 export const RELOCATED_MARKET_POSITION: Point = {
-  x: 220,
-  y: 350,
+  x: 130, // esplanade engazonnée Sud-Ouest du modèle (repère simulation)
+  y: 430,
 };
 
 /**

@@ -207,6 +207,10 @@ export interface Agent {
   currentNodeId?: string;
   previousNodeId?: string;
   lateralOffset?: number;
+  /** Destination en cours (repère simulation, mètres) et pause à l'arrivée. */
+  navDestX?: number;
+  navDestY?: number;
+  navPauseUntil?: number;
 }
 
 export interface StepMetric {

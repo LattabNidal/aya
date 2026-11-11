@@ -93,12 +93,12 @@ export function loadSiteModel(): Promise<SiteModelData> {
 }
 
 // ---------------------------------------------------------------------------
-// Repère : simulation (mètres 0..500 × 0..400) <-> modèle (mètres, centré)
+// Repère : simulation (mètres 0..520 × 0..525) <-> modèle (mètres) : simple translation (+260, +263)
 // Le domaine de simulation couvre tout le secteur, comme dans l'ancien plan.
 // ---------------------------------------------------------------------------
 
-export const SIM_W = 500;
-export const SIM_H = 400;
+export const SIM_W = 520;
+export const SIM_H = 525;
 
 export const MODEL_BOUNDS = { xMin: -260, xMax: 260, zMin: -263, zMax: 262 } as const;
 export const MODEL_W = MODEL_BOUNDS.xMax - MODEL_BOUNDS.xMin;
@@ -378,7 +378,7 @@ export function createLabelSprite(text: string, scale = 1): THREE.Sprite {
 
 // ---------------------------------------------------------------------------
 // Fond de plan 2D : rendu du dessus du modèle, calé sur le domaine de simulation
-// (500 × 400 m) pour que les éditeurs SVG en coordonnées de simulation s'y superposent.
+// (520 × 525 m) pour que les éditeurs SVG en coordonnées de simulation s'y superposent.
 // ---------------------------------------------------------------------------
 
 let planImagePromise: Promise<string> | null = null;
