@@ -75,7 +75,7 @@ export const PdfReportsView: React.FC<PdfReportsViewProps> = ({
   // Load logo as Data URL for PDF embedding
   const loadLogoAsDataUrl = async (): Promise<string | undefined> => {
     try {
-      const response = await fetch('/images/urbanresilience-logo.png');
+      const response = await fetch(`${import.meta.env.BASE_URL}images/urbanresilience-logo.png`);
       const blob = await response.blob();
       return new Promise((resolve) => {
         const reader = new FileReader();

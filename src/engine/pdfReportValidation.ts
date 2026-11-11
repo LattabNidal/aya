@@ -23,7 +23,7 @@ export async function runPdfAndLogoValidationSuite(): Promise<TestResultItem[]> 
 
   // Test 1: Logo asset presence check
   try {
-    const res = await fetch('/images/urbanresilience-logo.png');
+    const res = await fetch(`${import.meta.env.BASE_URL}images/urbanresilience-logo.png`);
     if (res.ok && res.status === 200) {
       results.push({
         id: 'TEST_LOGO_01',
